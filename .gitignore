@@ -17,3 +17,9 @@ data
 # Скелет хранится в vault-template/ (трекается); живой vault создаёт scripts/init-vault.mjs.
 /vault/
 
+
+# session/tool scratch, not project source
+scratch/
+logs/
+.opencode/
+*.bak-*

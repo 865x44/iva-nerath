@@ -1,5 +1,6 @@
 import { defineAgent } from "eve";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import { kimiFetch } from "./kimi-helper.js";
 
 // Model provider is chosen at setup (MODEL_PROVIDER): Ollama Cloud or OpenCode Zen.
 // Both are OpenAI-compatible; the key comes from .env. Both work behind any network.
@@ -21,10 +22,27 @@ const PROVIDERS = {
     model: (process.env.OPENCODE_MODEL ?? "deepseek-v4-pro").replace(/^opencode-go\//, ""),
     window: Number(process.env.OPENCODE_CONTEXT_WINDOW ?? 131072),
   },
+  kimi: {
+    baseURL: "https://api.kimi.com/coding/v1",
+    apiKey: process.env.KIMI_API_KEY,
+    model: process.env.KIMI_MODEL ?? "kimi-for-coding",
+    window: Number(process.env.KIMI_CONTEXT_WINDOW ?? 262144),
+  },
+  gemini: {
+    baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
+    apiKey: process.env.GEMINI_API_KEY,
+    model: process.env.GEMINI_MODEL ?? "gemini-2.5-flash",
+    window: Number(process.env.GEMINI_CONTEXT_WINDOW ?? 1048576),
+  },
+  openai: {
+    baseURL: "https://api.openai.com/v1",
+    apiKey: process.env.OPENAI_API_KEY,
+    model: process.env.OPENAI_MODEL ?? "gpt-5-codex",
+    window: Number(process.env.OPENAI_CONTEXT_WINDOW ?? 400000),
+  },
 } as const;
 
 const cfg = PROVIDERS[PROVIDER as keyof typeof PROVIDERS] ?? PROVIDERS.ollama;
-
 const provider = createOpenAICompatible({
   name: `iva-${PROVIDER}`,
   baseURL: cfg.baseURL,
@@ -33,6 +51,7 @@ const provider = createOpenAICompatible({
   // {include_usage:true}) → событие step.completed приходит без поля usage, и учёт токенов
   // (agent/hooks/usage.ts) пуст. Включаем, чтобы провайдер отдавал расход в финальном чанке.
   includeUsage: true,
+  fetch: PROVIDER === "kimi" ? kimiFetch : undefined,
 });
 
 export default defineAgent({
