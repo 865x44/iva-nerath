@@ -40,11 +40,14 @@ const HELP = [
   "/help — этот список",
   "/restart — перезапустить агента, если завис",
   "/new — начать заново (сброс текущего диалога)",
+  "/provider <ollama|opencode|kimi|gemini|openai> — сменить модель-провайдер",
   "/task <текст> — добавить задачу",
   "/tasks — показать задачи",
   "/digest — утренний дайджест",
   "/usage [today|week|month|by-model|by-source] — token usage",
 ].join("\n");
+
+const VALID_PROVIDERS = new Set(["ollama", "opencode", "kimi", "gemini", "openai"]);
 
 if (!TOKEN) {
   console.error("telegram-poll: нет TELEGRAM_BOT_TOKEN в .env — нечем поллить.");
@@ -141,6 +144,27 @@ async function reply(chatId, text) {
 const sc = (...args) =>
   new Promise((resolve) => execFile("systemctl", ["--user", ...args], (err) => resolve(!err)));
 
+async function updateModelProvider(newProvider) {
+  const envPath = join(ROOT, ".env");
+  let text;
+  try {
+    text = await readFile(envPath, "utf8");
+  } catch (e) {
+    throw new Error(`не могу прочитать .env: ${e.message}`);
+  }
+  const lines = text.split("\n");
+  let replaced = false;
+  const out = lines.map((line) => {
+    if (/^\s*MODEL_PROVIDER\s*=/.test(line)) {
+      replaced = true;
+      return `MODEL_PROVIDER=${newProvider}`;
+    }
+    return line;
+  });
+  if (!replaced) out.push(`MODEL_PROVIDER=${newProvider}`);
+  await writeFile(envPath, out.join("\n").replace(/\n*$/, "\n"), "utf8");
+}
+
 // Команды восстановления (/restart, /new, /clear, /compact) = «сбрось и подними».
 // Простой restart не спасает: eve на старте РЕ-ЭНКЬЮИТ все pending/running раны из
 // .workflow-data, поэтому зависший/раздутый ход возвращается. Гасим сервер, чистим
@@ -163,7 +187,7 @@ async function handleControl(update) {
   const text = (msg?.text || "").trim();
   if (!text.startsWith("/")) return false;
   const cmd = text.split(/\s+/)[0].replace(/@\w+$/, "").toLowerCase();
-  if (!["/help", "/usage", "/restart", "/new", "/clear", "/compact"].includes(cmd)) return false;
+  if (!["/help", "/usage", "/restart", "/new", "/clear", "/compact", "/provider"].includes(cmd)) return false;
   const from = String(msg?.from?.id ?? "");
   if (ALLOWED.size === 0 || !ALLOWED.has(from)) return false; // не доверенный — пусть eve дропнет
   const chatId = msg?.chat?.id;
@@ -182,6 +206,32 @@ async function handleControl(update) {
     }
     return true;
   }
+  // /provider — смена провайдера модели (обновляет .env и перезапускает сервис).
+  if (cmd === "/provider") {
+    const requested = text.split(/\s+/).slice(1).join(" ").trim().toLowerCase();
+    if (!requested) {
+      await reply(chatId, "Укажи провайдер: /provider <ollama|opencode|kimi|gemini|openai>");
+      return true;
+    }
+    if (!VALID_PROVIDERS.has(requested)) {
+      await reply(chatId, `Неизвестный провайдер «${requested}». Доступны: ${[...VALID_PROVIDERS].join(", ")}.`);
+      return true;
+    }
+    try {
+      await updateModelProvider(requested);
+    } catch (e) {
+      await reply(chatId, `Не смог обновить .env: ${e.message}`);
+      return true;
+    }
+    await reply(chatId, `Меняю провайдер на ${requested} и перезапускаю агента…`);
+    // Рестартуем только iva.service, а не весь набор (иначе этот же сервис
+    // iva-telegram-poll убивается посреди обработки команды и может
+    // переобработать ту же команду).
+    const ok = await sc("restart", "iva.service");
+    await reply(chatId, ok ? `Готово — теперь провайдер ${requested}. Пиши.` : "Не смог перезапустить агента. Проверь сервис на сервере.");
+    return true;
+  }
+
   // /restart, /new, /clear, /compact → перезапуск процесса (надёжный сброс/recovery).
   await reply(chatId, cmd === "/restart" ? "Перезапускаю агента…" : "Начинаю заново — перезапускаю сессию…");
   const ok = await restartAgent();
