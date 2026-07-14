@@ -54,6 +54,7 @@ const provider = createOpenAICompatible({
   fetch: PROVIDER === "kimi" ? kimiFetch : undefined,
 });
 
+export { PROVIDER, PROVIDERS };
 export default defineAgent({
   model: provider(cfg.model),
   // Кастомный провайдер не отдаёт метаданные окна через AI Gateway — задаём вручную.
