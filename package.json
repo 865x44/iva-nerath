@@ -22,6 +22,7 @@
     "chat": "node --env-file=.env scripts/tui-chat.mjs",
     "memory": "node --env-file=.env scripts/memory/rollup.ts",
     "doctor": "node --env-file=.env scripts/memory/doctor.ts",
+    "test": "node --experimental-strip-types --experimental-loader ./resolve-js-to-ts.mjs --test tests/*.test.ts",
     "typecheck": "tsgo",
     "tui": "node --env-file=.env scripts/tui.mjs"
   },
