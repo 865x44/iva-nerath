@@ -1,6 +1,7 @@
 {
   "name": "iva",
   "version": "0.3.0",
+  "packageManager": "npm@10.9.7",
   "type": "module",
   "bin": {
     "iva": "bin/iva.mjs"
@@ -22,6 +23,7 @@
     "memory": "node --env-file=.env scripts/memory/rollup.ts",
     "doctor": "node --env-file=.env scripts/memory/doctor.ts",
     "typecheck": "tsgo",
+    "verify:baseline": "/usr/bin/node-24 scripts/verify-baseline.mjs",
     "test:update-ui": "node --test scripts/lib/update-ui.test.mjs scripts/lib/update-check.test.mjs",
     "postinstall": "patch-package"
   },
