@@ -90,13 +90,7 @@ run("Telegram userbot guardrails", "python3", [
   "services/telegram-userbot/test_guardrails.py",
 ]);
 run("Autograph regression suite", "python3", [
-  "-m",
-  "unittest",
-  "discover",
-  "-s",
-  "vault-template/.claude/skills/autograph/tests",
-  "-p",
-  "test_*.py",
+  "vault-template/.claude/skills/autograph/tests/test_autograph.py",
   "-v",
 ]);
 
