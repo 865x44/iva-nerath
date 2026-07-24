@@ -1,6 +1,6 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
-import { exec } from "node:child_process";
+import { execFile } from "node:child_process";
 import { writeFile, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -24,14 +24,8 @@ function truncate(s: string): string {
   return s.slice(0, MAX_ERROR_CHARS) + "…";
 }
 
-function cli(...args: string[]): string {
-  const tokens = [BEERLIGHT_PYTHON, "-m", "beerlight.runtime", ...args];
-  // экранируем пробельные аргументы (для shell)
-  return tokens.map((t) => (/\s/.test(t) ? `"${t}"` : t)).join(" ");
-}
-
 function runCommand(
-  command: string,
+  args: string[],
   timeoutMs: number,
   parseJson: boolean = false,
 ): Promise<{
@@ -41,9 +35,19 @@ function runCommand(
   parsed?: unknown;
   timedOut?: boolean;
 }> {
+  const argv = ["-m", "beerlight.runtime", ...args];
+  if (argv.some((arg) => arg.includes("\0"))) {
+    return Promise.resolve({
+      stdout: "",
+      stderr: "Beerlight argument contains a NUL byte",
+      exitCode: 1,
+    });
+  }
+
   return new Promise((resolve) => {
-    exec(
-      command,
+    execFile(
+      BEERLIGHT_PYTHON,
+      argv,
       { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, encoding: "utf8" },
       (error, stdout, stderr) => {
         const e = error as (Error & { code?: number; killed?: boolean }) | null;
@@ -178,7 +182,6 @@ export default defineTool({
   inputSchema: BeerlightInput,
 
   async execute(input: BeerlightInput) {
-    let command: string;
     let timeout: number = FAST_TIMEOUT;
     let parseJson: boolean = false;
 
@@ -205,11 +208,14 @@ export default defineTool({
         const requestFile = join(tmpDir, "request.json");
         await writeFile(requestFile, JSON.stringify(request, null, 2));
 
-        command = cli("run-json", requestFile);
         timeout = RUN_TIMEOUT;
         parseJson = true;
 
-        const result = await runCommand(command, timeout, parseJson);
+        const result = await runCommand(
+          ["run-json", requestFile],
+          timeout,
+          parseJson,
+        );
 
         // убираем временный файл
         try {
@@ -318,8 +324,7 @@ export default defineTool({
           }
         }
 
-        command = cli(...args);
-        const result = await runCommand(command, timeout);
+        const result = await runCommand(args, timeout);
         return {
           exitCode: result.exitCode,
           stdout: result.stdout,
@@ -339,10 +344,9 @@ export default defineTool({
         if (input.calibrate) args.push("--calibrate");
         if (input.session_dir) args.push("--session", input.session_dir);
 
-        command = cli(...args);
         timeout = FAST_TIMEOUT;
 
-        const result = await runCommand(command, timeout);
+        const result = await runCommand(args, timeout);
         return {
           exitCode: result.exitCode,
           stdout: result.stdout,
@@ -364,10 +368,9 @@ export default defineTool({
         ];
         if (input.include_traces) args.push("--include-traces");
 
-        command = cli(...args);
         timeout = FAST_TIMEOUT;
 
-        const result = await runCommand(command, timeout);
+        const result = await runCommand(args, timeout);
         return {
           exitCode: result.exitCode,
           stdout: result.stdout,
