@@ -469,14 +469,24 @@ export default telegramChannel({
       }
     },
     // Ход упал (в т.ч. переполнение контекста / HookConflict) — даём пользователю escape.
-    async "turn.failed"(_data, channel) {
+    async "turn.failed"(data, channel) {
       await finishStatus(channel.telegram, "failed");
       try {
+        const message = data.message ?? "";
+        const details = JSON.stringify(data.details ?? {});
+        const isOpenCodeAvailabilityError =
+          message.includes("OpenCode Go Availability Error") ||
+          details.includes("OpenCode Go Availability Error");
         await channel.telegram.sendMessage(
-          tr(
-            "The turn failed (the context may have overflowed). Commands: /new — start over, /restart — restart.",
-            "Ход не удался (возможно, переполнился контекст). Команды: /new — начать заново, /restart — перезапустить.",
-          ),
+          isOpenCodeAvailabilityError
+            ? tr(
+                "OpenCode Go is temporarily unavailable: both the primary and fallback models failed. Try again later.",
+                "OpenCode Go временно недоступен: основная и резервная модели не ответили. Попробуй позже.",
+              )
+            : tr(
+                "The turn failed (the context may have overflowed). Commands: /new — start over, /restart — restart.",
+                "Ход не удался (возможно, переполнился контекст). Команды: /new — начать заново, /restart — перезапустить.",
+              ),
         );
       } catch {
         /* молча игнорируем сбой ответа */
