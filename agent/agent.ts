@@ -1,65 +1,29 @@
 import { defineAgent } from "eve";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
-import { kimiFetch } from "./kimi-helper.js";
+// Провайдер и его модели — единый источник в provider.ts (тот же конфиг у agent/vision.ts).
+// codex = подписка ChatGPT (Responses API + OAuth); ollama/opencode = OpenAI-совместимый chat.
+import { providerConfig as cfg, providerName, withReasoningStripped, makeCodexModel } from "./provider.js";
 
-// Model provider is chosen at setup (MODEL_PROVIDER): Ollama Cloud or OpenCode Zen.
-// Both are OpenAI-compatible; the key comes from .env. Both work behind any network.
-const PROVIDER = process.env.MODEL_PROVIDER ?? "ollama";
+// Codex-подписка говорит на Responses API — отдельная модель-фабрика (@ai-sdk/openai).
+// Остальные провайдеры — OpenAI-совместимый chat/completions через openai-compatible.
+const textModel =
+  providerName === "codex"
+    ? makeCodexModel()
+    : createOpenAICompatible({
+        name: `iva-${providerName}`,
+        baseURL: cfg.baseURL,
+        apiKey: cfg.apiKey,
+        // Без этого стрим OpenAI-совместимых провайдеров НЕ несёт usage (нет stream_options:
+        // {include_usage:true}) → событие step.completed приходит без поля usage, и учёт токенов
+        // (agent/hooks/usage.ts) пуст. Включаем, чтобы провайдер отдавал расход в финальном чанке.
+        includeUsage: true,
+      })(cfg.textModel);
 
-const PROVIDERS = {
-  ollama: {
-    baseURL: "https://ollama.com/v1",
-    apiKey: process.env.OLLAMA_API_KEY,
-    model: process.env.OLLAMA_MODEL ?? "deepseek-v4-pro",
-    window: Number(process.env.OLLAMA_CONTEXT_WINDOW ?? 131072),
-  },
-  opencode: {
-    baseURL: "https://opencode.ai/zen/go/v1",
-    apiKey: process.env.OPENCODE_API_KEY,
-    // Эндпоинт ждёт bare-ID (deepseek-v4-pro). Префикс провайдера "opencode-go/" —
-    // внутреннее имя UI, в тело запроса он уходить НЕ должен, иначе сервер отвечает
-    // "Model ... is not supported". Срезаем его и из дефолта, и из старых .env.
-    model: (process.env.OPENCODE_MODEL ?? "deepseek-v4-pro").replace(/^opencode-go\//, ""),
-    window: Number(process.env.OPENCODE_CONTEXT_WINDOW ?? 131072),
-  },
-  kimi: {
-    baseURL: "https://api.kimi.com/coding/v1",
-    apiKey: process.env.KIMI_API_KEY,
-    model: process.env.KIMI_MODEL ?? "kimi-for-coding",
-    window: Number(process.env.KIMI_CONTEXT_WINDOW ?? 262144),
-  },
-  gemini: {
-    baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
-    apiKey: process.env.GEMINI_API_KEY,
-    model: process.env.GEMINI_MODEL ?? "gemini-2.5-flash",
-    window: Number(process.env.GEMINI_CONTEXT_WINDOW ?? 1048576),
-  },
-  openai: {
-    baseURL: "https://api.openai.com/v1",
-    apiKey: process.env.OPENAI_API_KEY,
-    model: process.env.OPENAI_MODEL ?? "gpt-5-codex",
-    window: Number(process.env.OPENAI_CONTEXT_WINDOW ?? 400000),
-  },
-} as const;
-
-const cfg = PROVIDERS[PROVIDER as keyof typeof PROVIDERS] ?? PROVIDERS.ollama;
-const provider = createOpenAICompatible({
-  name: `iva-${PROVIDER}`,
-  baseURL: cfg.baseURL,
-  apiKey: cfg.apiKey,
-  // Без этого стрим OpenAI-совместимых провайдеров НЕ несёт usage (нет stream_options:
-  // {include_usage:true}) → событие step.completed приходит без поля usage, и учёт токенов
-  // (agent/hooks/usage.ts) пуст. Включаем, чтобы провайдер отдавал расход в финальном чанке.
-  includeUsage: true,
-  fetch: PROVIDER === "kimi" ? kimiFetch : undefined,
-});
-
-export { PROVIDER, PROVIDERS };
 export default defineAgent({
-  model: provider(cfg.model),
+  model: withReasoningStripped(textModel),
   // Кастомный провайдер не отдаёт метаданные окна через AI Gateway — задаём вручную.
   // ВАЖНО: значение ОБЯЗАНО быть ≤ реального окна модели, иначе запрос переполнит окно до компактации.
-  modelContextWindowTokens: cfg.window,
+  modelContextWindowTokens: cfg.contextWindow,
   // Защита от overflow: компактуем заранее (0.7 вместо дефолтных 0.9), оставляя запас на
   // summary-вызов и следующий ход. eve сам саммаризирует старые ходы, сохраняя todo и read-tracking.
   compaction: { thresholdPercent: 0.7 },

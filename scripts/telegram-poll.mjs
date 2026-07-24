@@ -1,67 +1,71 @@
 #!/usr/bin/env node
-// Telegram long-polling мост → локальный webhook-роут eve.
+// Telegram long-polling bridge → local eve webhook route.
 //
 //   node --env-file=.env scripts/telegram-poll.mjs
 //
-// eve Telegram-канал работает ТОЛЬКО по webhook (POST /eve/v1/telegram, проверка
-// заголовка X-Telegram-Bot-Api-Secret-Token). На голом VPS публичного HTTPS нет,
-// поэтому сами забираем апдейты у Telegram (getUpdates, long-poll) и POST-им их в
-// локальный роут eve с тем же секретом — Telegram видит обычного бота, прокси не нужен.
-// Канал/агент не меняются. Webhook и polling взаимоисключающи → на старте deleteWebhook.
-import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
+// The eve Telegram channel works ONLY via webhook (POST /eve/v1/telegram, validating
+// the X-Telegram-Bot-Api-Secret-Token header). On a bare VPS there is no public HTTPS,
+// so we fetch updates from Telegram ourselves (getUpdates, long-poll) and POST them to
+// the local eve route with the same secret — Telegram sees an ordinary bot, no proxy needed.
+// The channel/agent are unchanged. Webhook and polling are mutually exclusive → deleteWebhook on start.
+import { readFile, writeFile, mkdir, rm, readdir, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { randomBytes } from "node:crypto";
 import { readEntries, summarize, formatUsageReport, parseWindow } from "./lib/usage.mjs";
+import { readEnvFresh, readEnvValues, upsertEnv } from "./lib/env-file.mjs";
+import { CATALOG, EFFORTS, fetchModels, checkKey } from "./lib/model-catalog.mjs";
+import { getAccessToken, runDeviceCodeLogin } from "./lib/codex-oauth.mjs";
+import { compactNumber, modelSummary } from "./lib/model-summary.mjs";
+import { acquireUpdateLock, releaseUpdateLock } from "./lib/update-safety.mjs";
+import { inspectUpstream, markVersionNotified, updateOffer } from "./lib/update-check.mjs";
+// ESC-остановка: канал пишет в data/run-status.json, идёт ли сейчас ход по чату;
+// мост по нему буферизует входящие (см. очередь ниже) и обслуживает /stop.
+import { isRunning } from "./lib/run-status.mjs";
+// Двуязычие: единый источник языка (getLang) + одна таблица команд (COMMANDS) для /help
+// и синего командного меню Telegram. tr(en, ru) — функция (язык не замораживаем в const).
+import { getLang, tr, helpText, botCommands } from "./lib/i18n.mjs";
+// Session-store out-of-band диалогов: /model, /think и /menu делят ОДИН слот на пользователя.
+import { createFlows } from "./lib/tg-flow.mjs";
+// Движок вложенного inline-меню (/menu) — весь UI настроек в мосте, out-of-band.
+import { createMenu } from "./lib/menu/index.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const WORKFLOW_DIR = join(ROOT, ".workflow-data");
+const NODE = process.execPath;
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const SECRET = process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN;
 const PORT = process.env.IVA_PORT ?? "8723";
 const HOST = (process.env.ASSISTANT_HOST ?? `http://127.0.0.1:${PORT}`).replace(/\/$/, "");
-const DATA_DIR = process.env.ASSISTANT_DATA_DIR ?? "data";
+const DATA_DIR_RAW = process.env.ASSISTANT_DATA_DIR ?? "data";
+const DATA_DIR = DATA_DIR_RAW.startsWith("/") ? DATA_DIR_RAW : join(ROOT, DATA_DIR_RAW);
+// Absolute paths for the /model wizard: .env is read fresh (this process's env goes
+// stale after the wizard edits the file) and data/ holds codex-auth.json.
+const ENV_PATH = join(ROOT, ".env");
+const DATA_DIR_ABS = DATA_DIR;
 const ROUTE = `${HOST}/eve/v1/telegram`;
 const API = `https://api.telegram.org/bot${TOKEN}`;
 const OFFSET_FILE = join(DATA_DIR, "telegram-offset.json");
-// Пауза между апдейтами ОДНОГО чата: даём eve запарковать ход и зарегистрировать
-// continuation-хук, иначе бёрст стартует второй ран на тот же токен → HookConflictError.
+// Pause between updates of the SAME chat: we give eve time to park the turn and register
+// the continuation hook, otherwise a burst starts a second run on the same token → HookConflictError.
 const SETTLE_MS = Number(process.env.TELEGRAM_POLL_SETTLE_MS ?? 1500);
+const UPDATE_JOB_TTL_MS = 6 * 60 * 60 * 1000;
 
-// Доверенные ID — только им разрешены управляющие команды (/restart и т.п.).
+// Trusted IDs — only they are allowed control commands (/restart etc.).
 const ALLOWED = new Set(
   (process.env.TELEGRAM_ALLOWED_USER_IDS ?? "").split(/[,\s]+/).map((s) => s.trim()).filter(Boolean),
 );
 
-const HELP = [
-  "Команды Iva:",
-  "/help — этот список",
-  "/restart — перезапустить агента, если завис",
-  "/new — начать заново (сброс текущего диалога)",
-  "/provider <ollama|opencode|kimi|gemini|openai> — сменить модель-провайдер",
-  "/task <текст> — добавить задачу",
-  "/tasks — показать задачи",
-  "/digest — утренний дайджест",
-  "/usage [today|week|month|by-model|by-source] — token usage",
-].join("\n");
-
-const VALID_PROVIDERS = new Set(["ollama", "opencode", "kimi", "gemini", "openai"]);
-
-if (!TOKEN) {
-  console.error("telegram-poll: нет TELEGRAM_BOT_TOKEN в .env — нечем поллить.");
-  process.exit(1);
-}
-if (!SECRET) {
-  console.error("telegram-poll: нет TELEGRAM_WEBHOOK_SECRET_TOKEN — канал не примет апдейты.");
-  process.exit(1);
-}
+// LANG/t/HELP убраны: язык теперь динамический (getLang из i18n.mjs, реагирует на
+// data/settings.json без рестарта), /help генерится helpText() из общей таблицы COMMANDS.
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 
-// null ⇒ файла нет (первый запуск) — отличаем от честного offset 0.
+// null ⇒ no file (first run) — distinguish from a genuine offset 0.
 async function loadOffset() {
   try {
     const { offset } = JSON.parse(await readFile(OFFSET_FILE, "utf8"));
@@ -71,21 +75,21 @@ async function loadOffset() {
   }
 }
 
-// Первый запуск: встать за хвост очереди (последний update_id + 1), чтобы не реплеить
-// install-бэклог. drop_pending уже чистит очередь у Telegram — это пояс поверх подтяжек.
+// First run: jump to the tail of the queue (last update_id + 1) to avoid replaying the
+// install backlog. drop_pending already clears Telegram's queue — this is a belt over suspenders.
 async function fastForwardOffset() {
   try {
     const data = await tg("getUpdates", { offset: -1, timeout: 0 });
     const list = data.ok ? data.result || [] : [];
     return list.length ? list[list.length - 1].update_id + 1 : 0;
   } catch (e) {
-    log("fast-forward offset не удался:", e.message);
+    log("fast-forward offset failed:", e.message);
     return 0;
   }
 }
 
-// Ключ сериализации = continuation-хук eve (telegram:<chatId>:<threadId>:):
-// один чат (+ топик форума) — одна сессия, доставляем в неё по одному с паузой.
+// Serialization key = eve continuation hook (telegram:<chatId>:<threadId>:):
+// one chat (+ forum topic) — one session, deliver into it one at a time with a pause.
 function chatKey(update) {
   const msg = update.message ?? update.callback_query?.message;
   const chatId = msg?.chat?.id;
@@ -111,8 +115,8 @@ async function tg(method, body) {
   return res.json();
 }
 
-// Доставить один апдейт в локальный eve (имитируем webhook). Ждём 2xx — не теряем апдейт,
-// даже если сервер ещё поднимается (бэкофф до 15с).
+// Deliver one update to the local eve (we mimic a webhook). Wait for 2xx — don't drop the update,
+// even if the server is still coming up (backoff up to 15s).
 async function deliver(update) {
   for (let attempt = 1; ; attempt++) {
     try {
@@ -125,77 +129,652 @@ async function deliver(update) {
         body: JSON.stringify(update),
       });
       if (res.ok) return;
-      log(`deliver: eve ответил ${res.status} (попытка ${attempt}) — ретрай`);
+      log(`deliver: eve replied ${res.status} (attempt ${attempt}) — retrying`);
     } catch (e) {
-      log(`deliver: eve недоступен (${e.message}, попытка ${attempt}) — жду сервер`);
+      log(`deliver: eve unavailable (${e.message}, attempt ${attempt}) — waiting for server`);
     }
     await sleep(Math.min(15000, 1000 * attempt));
   }
 }
 
+// Время последней доставки по chat key — для паузы SETTLE_MS между апдейтами одного чата.
+// МОДУЛЬ-уровень (не локальная в main): её обязан обновлять и синтетический deliver меню
+// (дистилляция интервью), иначе реальное сообщение сразу после него ушло бы без паузы —
+// в окно, пока eve ещё не записала run-status и не зарегистрировала continuation-hook →
+// второй ран на том же токене → HookConflictError.
+const lastDeliverAt = new Map();
+
+// Доставка с пейсингом: выдержать SETTLE_MS с последней доставки в этот чат, доставить,
+// отметить время. ЕДИНЫЙ путь для главного цикла и для меню (deps.deliver) — оба делят
+// lastDeliverAt, поэтому доставка из меню сдвигает паузу для следующего реального сообщения.
+async function pacedDeliver(update) {
+  const key = chatKey(update);
+  if (key !== null && SETTLE_MS > 0) {
+    const prev = lastDeliverAt.get(key);
+    if (prev !== undefined) {
+      const wait = SETTLE_MS - (Date.now() - prev);
+      if (wait > 0) await sleep(wait);
+    }
+  }
+  await deliver(update); // wait for successful delivery — ordered and lossless
+  if (key !== null) lastDeliverAt.set(key, Date.now());
+}
+
 async function reply(chatId, text) {
   try {
-    await tg("sendMessage", { chat_id: chatId, text });
+    const data = await tg("sendMessage", { chat_id: chatId, text });
+    if (!data.ok) throw new Error(data.description || "sendMessage failed");
+    return data.result;
   } catch (e) {
     log("reply failed:", e.message);
+    return null;
+  }
+}
+
+async function edit(chatId, messageId, text, replyMarkup) {
+  try {
+    const body = { chat_id: chatId, message_id: messageId, text };
+    if (replyMarkup !== undefined) body.reply_markup = replyMarkup;
+    const data = await tg("editMessageText", body);
+    if (!data.ok) throw new Error(data.description || "editMessageText failed");
+    return data.result;
+  } catch (e) {
+    if (!/message is not modified/i.test(e.message)) log("edit failed:", e.message);
+    return null;
   }
 }
 
 const sc = (...args) =>
   new Promise((resolve) => execFile("systemctl", ["--user", ...args], (err) => resolve(!err)));
 
-async function updateModelProvider(newProvider) {
-  const envPath = join(ROOT, ".env");
-  let text;
-  try {
-    text = await readFile(envPath, "utf8");
-  } catch (e) {
-    throw new Error(`не могу прочитать .env: ${e.message}`);
-  }
-  const lines = text.split("\n");
-  let replaced = false;
-  const out = lines.map((line) => {
-    if (/^\s*MODEL_PROVIDER\s*=/.test(line)) {
-      replaced = true;
-      return `MODEL_PROVIDER=${newProvider}`;
-    }
-    return line;
-  });
-  if (!replaced) out.push(`MODEL_PROVIDER=${newProvider}`);
-  await writeFile(envPath, out.join("\n").replace(/\n*$/, "\n"), "utf8");
-}
-
-// Команды восстановления (/restart, /new, /clear, /compact) = «сбрось и подними».
-// Простой restart не спасает: eve на старте РЕ-ЭНКЬЮИТ все pending/running раны из
-// .workflow-data, поэтому зависший/раздутый ход возвращается. Гасим сервер, чистим
-// .workflow-data (пока процесс остановлен — не из-под живого), поднимаем. Стирает ВСЕ
-// запаркованные диалоги — для одно-пользовательского ассистента это и есть «начать заново».
+// Recovery commands (/restart, /new, /clear, /compact) = "reset and bring back up".
+// A plain restart doesn't help: on start eve RE-ENQUEUES all pending/running runs from
+// .workflow-data, so the stuck/bloated turn comes back. We stop the server, clear
+// .workflow-data (while the process is stopped — not from under a live one), bring it back up. It wipes ALL
+// parked conversations — for a single-user assistant this is exactly "start over".
 async function restartAgent() {
   await sc("stop", "iva.service");
   try {
     await rm(WORKFLOW_DIR, { recursive: true, force: true });
   } catch (e) {
-    log("reset: не удалось очистить .workflow-data:", e.message);
+    log("reset: failed to clear .workflow-data:", e.message);
   }
+  // Reset wipes the ESC-stop state too: a stale "running" flag would keep buffering
+  // messages, and a stale queue would replay pre-reset messages into the fresh dialog.
+  await rm(join(DATA_DIR, "run-status.json"), { force: true }).catch(() => {});
+  await rm(join(DATA_DIR, "telegram-queue.json"), { force: true }).catch(() => {});
   return sc("start", "iva.service");
 }
 
-// Управляющие команды обрабатываются МОСТОМ (out-of-band) — работают, даже если агент завис.
-// Только для доверенных ID. Возвращает true, если команда обработана (в eve НЕ доставляем).
-async function handleControl(update) {
-  const msg = update.message;
-  const text = (msg?.text || "").trim();
-  if (!text.startsWith("/")) return false;
-  const cmd = text.split(/\s+/)[0].replace(/@\w+$/, "").toLowerCase();
-  if (!["/help", "/usage", "/restart", "/new", "/clear", "/compact", "/provider"].includes(cmd)) return false;
-  const from = String(msg?.from?.id ?? "");
-  if (ALLOWED.size === 0 || !ALLOWED.has(from)) return false; // не доверенный — пусть eve дропнет
-  const chatId = msg?.chat?.id;
-  if (cmd === "/help") {
-    await reply(chatId, HELP);
+// ── ESC-stop message queue (Claude Code semantics) ─────────────────────────
+// While a turn is running for a chat, ordinary message updates are NOT delivered to eve:
+// they are appended to data/telegram-queue.json and acknowledged with a 👀 reaction.
+// eve would otherwise buffer them in-memory and auto-process the batch as soon as the
+// turn parks (its docs call that drain best-effort) — we want the stricter semantics:
+// queued messages enter the context only WITH the next fresh message. When the agent is
+// idle again, the next message carries the queue along as update.message.iva_buffered
+// (the channel turns it into context lines).
+const QUEUE_FILE = join(DATA_DIR, "telegram-queue.json");
+
+async function loadQueue() {
+  try {
+    const q = JSON.parse(await readFile(QUEUE_FILE, "utf8"));
+    return typeof q === "object" && q !== null ? q : {};
+  } catch {
+    return {};
+  }
+}
+
+async function saveQueue(q) {
+  try {
+    await mkdir(DATA_DIR, { recursive: true });
+    await writeFile(QUEUE_FILE, JSON.stringify(q), "utf8");
+  } catch (e) {
+    log("queue save failed:", e.message);
+  }
+}
+
+// One queued message → one context line. Media can't be re-fed later (the channel
+// processes files only on live delivery), so it degrades to a placeholder + caption.
+const MEDIA_KEYS = [
+  "photo", "voice", "audio", "video", "video_note",
+  "animation", "sticker", "document", "location", "contact", "poll",
+];
+function bufferEntryOf(msg) {
+  const text = (msg.text || "").trim();
+  if (text) return text;
+  const kind = MEDIA_KEYS.find((k) => msg[k] !== undefined);
+  const caption = (msg.caption || "").trim();
+  if (!kind) return caption || null;
+  const note = tr(
+    `[${kind} — sent while a turn was running; the attachment wasn't processed, ask to resend it if you need it]`,
+    `[${kind} — прислано пока шёл ход; вложение не обработано, попроси прислать заново, если оно нужно]`,
+  );
+  return caption ? `${note} ${tr("Caption:", "Подпись:")} ${caption}` : note;
+}
+
+// ── self-update (/update) ──────────────────────────────────────────────────
+// Run `iva update` in its OWN transient systemd scope, so it survives the restart of
+// THIS bridge (restartServices restarts iva-telegram-poll too — a plain child would be
+// killed with us). --collect GC's the unit after exit. The updater reads a 0600 job
+// file and posts each phase directly through Bot API, so no bridge process survives.
+function launchSelfUpdate(jobId) {
+  const args = [
+    "--user", "--collect", `--unit=iva-self-update-${Date.now()}`,
+    `--working-directory=${ROOT}`,
+    `--setenv=PATH=${process.env.PATH || ""}`,
+    NODE, join(ROOT, "bin/iva.mjs"), "update", "--telegram-job", jobId,
+  ];
+  return new Promise((resolve) =>
+    execFile("systemd-run", args, (err, out, e) => resolve({ ok: !err, msg: (e || out || "").toString().trim() })),
+  );
+}
+
+export async function handleUpdateCheck(
+  chatId,
+  { inspectImpl = inspectUpstream, markNotifiedImpl = markVersionNotified, envImpl = () => readEnvFresh(ENV_PATH) } = {},
+) {
+  const status = await reply(chatId, tr("◇ Checking for updates", "◇ Проверяю обновления"));
+  if (!status) return;
+  let info;
+  try {
+    info = await inspectImpl({ root: ROOT });
+  } catch (e) {
+    await edit(chatId, status.message_id, tr("⚠️ Couldn't check for updates", "⚠️ Не удалось проверить обновления"));
+    return;
+  }
+  if (!info.hasCommitUpdate) {
+    // Not modelSummary(process.env): the /model wizard edits .env at runtime and restarts
+    // only the agent — this bridge keeps running, so its env snapshot may hold the old model.
+    const model = modelSummary(await envImpl());
+    await edit(chatId, status.message_id, tr(
+      `✅ You're up to date\n\nIva v${info.localVersion ?? "?"}\nModel: ${model.line}`,
+      `✅ У вас актуальная версия\n\nIva v${info.localVersion ?? "?"}\nМодель: ${model.line}`,
+    ));
+    return;
+  }
+  const bump =
+    info.remoteVersion && info.remoteVersion !== info.localVersion
+      ? `v${info.localVersion ?? "?"} → v${info.remoteVersion}`
+      : tr(`v${info.localVersion ?? "?"} → newer build`, `v${info.localVersion ?? "?"} → новая сборка`);
+  const offered = await edit(chatId, status.message_id, tr(
+    `⬆️ Update available\n\n${bump}\nSettings and local changes will be preserved.`,
+    `⬆️ Доступно обновление\n\n${bump}\nНастройки и локальные изменения будут сохранены.`,
+  ), updateOffer(info.localVersion, info.remoteVersion, getLang()).replyMarkup);
+  if (offered && info.hasVersionUpdate) {
+    await markNotifiedImpl(DATA_DIR, info.remoteVersion).catch((error) => log("update notification state failed:", error.message));
+  }
+}
+
+async function removeStaleUpdateJobs() {
+  const jobs = join(DATA_DIR, "update-jobs");
+  let names;
+  try { names = await readdir(jobs); } catch { return; }
+  await Promise.all(names.filter((name) => name.endsWith(".json")).map(async (name) => {
+    const path = join(jobs, name);
+    try {
+      if (Date.now() - (await stat(path)).mtimeMs > UPDATE_JOB_TTL_MS) await rm(path, { force: true });
+    } catch {}
+  }));
+}
+
+// Inline-button taps for the /update flow. Handled by the bridge; never delivered to eve.
+export async function handleUpdateCallback(cq) {
+  const from = String(cq.from?.id ?? "");
+  const chatId = cq.message?.chat?.id;
+  const messageId = cq.message?.message_id;
+  await tg("answerCallbackQuery", { callback_query_id: cq.id }); // clear the button spinner
+  if (ALLOWED.size === 0 || !ALLOWED.has(from)) return true; // swallow untrusted taps
+  const action = cq.data.slice("iva_update:".length);
+  if (action === "skip") {
+    await edit(chatId, messageId, tr("– Update postponed", "– Обновление отложено"), { inline_keyboard: [] });
     return true;
   }
-  // /usage — расход токенов из data/usage.jsonl. Out-of-band и БЕСПЛАТНО (модель не зовём).
+
+  const jobId = randomBytes(8).toString("hex");
+  const lock = acquireUpdateLock(DATA_DIR, jobId);
+  if (!lock.ok) {
+    await edit(chatId, messageId, tr("⚠️ An update is already running", "⚠️ Обновление уже идёт"), { inline_keyboard: [] });
+    return true;
+  }
+  const jobs = join(DATA_DIR, "update-jobs");
+  await mkdir(jobs, { recursive: true });
+  await writeFile(join(jobs, `${jobId}.json`), JSON.stringify({ chatId, messageId, locale: getLang(), startedAt: new Date().toISOString() }), { mode: 0o600 });
+  await edit(chatId, messageId, tr("◇ Saving your changes", "◇ Сохраняю ваши изменения"), { inline_keyboard: [] });
+  const r = await launchSelfUpdate(jobId);
+  if (!r.ok) {
+    releaseUpdateLock(lock);
+    await rm(join(jobs, `${jobId}.json`), { force: true });
+    await edit(chatId, messageId, tr("⚠️ Couldn't start the update", "⚠️ Не удалось запустить обновление"));
+  }
+  return true;
+}
+
+// ── /model & /think wizard (out-of-band, inline keyboards) ─────────────────
+// State lives in memory keyed by `${chatId}:${userId}`; each flow edits ONE message
+// (like /update). A bridge restart loses state — stale button taps get "диалог устарел".
+// Config is always read fresh from .env: this process's env goes stale after writes.
+// Примитивы визарда вынесены в scripts/lib/tg-flow.mjs (createFlows): тот же слот на
+// пользователя делят /model, /think и /menu. Локальные алиасы сохраняют исходные call-sites —
+// дифф визарда минимальный, а стейт-семантика (ключ chatId:userId, TTL 15 мин, identity-replace,
+// edit-in-place) дословно та же.
+const flows = createFlows({ tg, log });
+const getWizard = (chatId, userId) => flows.get(chatId, userId);
+const newWizard = (chatId, userId, flow, extra) => flows.start(chatId, userId, flow, extra);
+const wizScreen = (st, text, rows) => flows.screen(st, text, rows);
+const endWizard = (st, text, rows) => flows.end(st, text, rows);
+
+const EFFORT_SET = new Set(EFFORTS);
+// effortLabel — функция (tr на месте вызова): язык не замораживается в module-level const.
+const effortLabel = (v) => (v && EFFORT_SET.has(v) ? v : tr("not set", "не задан"));
+
+async function currentConfig() {
+  const env = await readEnvValues(ENV_PATH);
+  const provider = CATALOG[env.MODEL_PROVIDER] ? env.MODEL_PROVIDER : "ollama";
+  const cat = CATALOG[provider];
+  return {
+    provider,
+    model: env[cat.modelVar] || cat.def,
+    effort: (env.THINKING_EFFORT ?? "").toLowerCase(),
+  };
+}
+
+const btn = (text, callback_data) => ({ text, callback_data });
+// cancelRow/menuRow — функции (tr на месте вызова), не module-level const с переведённой строкой.
+const cancelRow = () => [btn(tr("Cancel", "Отмена"), "iva_model:cancel")];
+// Ряд «‹ Меню» на терминальных экранах визарда — возврат в /menu. r:o усыновляет
+// это сообщение даже без живого стейта (движок меню само-чинится после рестарта моста).
+const menuRow = () => [[btn(tr("‹ Menu", "‹ Меню"), "iva_menu:r:o")]];
+
+// Секреты (API-ключи) принимаем ТОЛЬКО в личке: в группе бот может не иметь прав удалить
+// сообщение с ключом (deleteMessage вернёт !ok), и его увидят все участники. Знак chatId
+// надёжен — id личных чатов положительны, групп/супергрупп отрицательны (та же isPrivate,
+// что в menu-экранах search.mjs). Гейтим ОБА пути к ключу: и голый /model, и хендофф из /menu.
+const isPrivateChat = (st) => Number(st.chatId) > 0;
+const refuseSecretInGroup = (st) =>
+  endWizard(st, tr(
+    "API keys are secrets — open a private chat with me and set the key there.",
+    "Ключи — это секрет. Открой личный чат со мной и введи ключ там.",
+  ), menuRow());
+
+function effortRows(ns, withKeep) {
+  return [
+    EFFORTS.map((e) => btn(e, `${ns}:eff:${e}`)),
+    [btn(tr("Don't set", "Не задавать"), `${ns}:eff:unset`), withKeep ? btn(tr("Keep", "Оставить"), `${ns}:keep`) : cancelRow()[0]],
+  ];
+}
+
+// {msgId} (опц.) — хендофф из /menu: визард заменяет flow-слот и рисует в ТО ЖЕ сообщение меню.
+async function handleModelCmd(chatId, from, { msgId } = {}) {
+  const { provider, model, effort } = await currentConfig();
+  const st = newWizard(chatId, from, "model");
+  st.msgId = msgId ?? null;
+  await wizScreen(st, tr(
+    `Now: provider ${provider} · model ${model} · thinking: ${effortLabel(effort)}.`,
+    `Сейчас: провайдер ${provider} · модель ${model} · размышления: ${effortLabel(effort)}.`,
+  ), [
+    [btn(tr("Change", "Сменить"), "iva_model:chg"), btn(tr("Keep", "Оставить"), "iva_model:keep")],
+  ]);
+}
+
+async function handleThinkCmd(chatId, from, { msgId } = {}) {
+  const { effort } = await currentConfig();
+  const st = newWizard(chatId, from, "think");
+  st.msgId = msgId ?? null;
+  await wizScreen(st, tr(`Thinking level: ${effortLabel(effort)}.`, `Уровень размышлений: ${effortLabel(effort)}.`), effortRows("iva_think", true));
+}
+
+async function showProviderScreen(st) {
+  const rows = Object.entries(CATALOG).map(([id, c]) => [btn(c.label, `iva_model:prov:${id}`)]);
+  rows.push(cancelRow());
+  await wizScreen(st, tr("Pick a provider:", "Выбери провайдера:"), rows);
+}
+
+async function pickProvider(st, provider) {
+  st.provider = provider;
+  const cat = CATALOG[provider];
+  if (cat.auth === "oauth") {
+    // File presence is not enough — a revoked/expired refresh token would let the wizard
+    // finish into a config that 401s every turn. getAccessToken refreshes a stale token
+    // and throws when there is no usable auth → device-link login.
+    try {
+      await getAccessToken(DATA_DIR_ABS);
+    } catch {
+      return startCodexLogin(st);
+    }
+    return showModelScreen(st);
+  }
+  const env = await readEnvValues(ENV_PATH);
+  if (!env[cat.keyVar]) {
+    // В группе ключ вводить нельзя (его не удалить) — отказ до установки awaitText.
+    if (!isPrivateChat(st)) return refuseSecretInGroup(st);
+    // awaitText обобщает старый awaitKey (см. handleControl): диспатчер по pending.awaitText
+    // отдаёт следующий текст этому визарду (handleKeyMessage), а не eve.
+    st.awaitText = { kind: "apikey", secret: true, data: {} };
+    await wizScreen(st,
+      tr(
+        `Need a ${cat.label} API key. Send it in the next message — I'll delete it from the chat right away.\n` +
+        "If I don't confirm within a couple of seconds — don't resend, start over with /model.",
+        `Нужен API-ключ ${cat.label}. Пришли его следующим сообщением — я сразу удалю его из чата.\n` +
+        "Если через пару секунд не подтвержу получение — не отправляй повторно, начни заново с /model.",
+      ),
+      [cancelRow()]);
+    return;
+  }
+  return showModelScreen(st);
+}
+
+async function showModelScreen(st) {
+  const cat = CATALOG[st.provider];
+  const env = await readEnvValues(ENV_PATH);
+  let models;
+  try {
+    models = await fetchModels(st.provider, cat.keyVar ? env[cat.keyVar] : undefined, { dataDir: DATA_DIR_ABS });
+  } catch {
+    // fetchModels only throws when the live /models probe rejected the stored key (401/403) —
+    // re-enter the key flow instead of offering a list the dead key can't use.
+    // В группе новый ключ вводить нельзя (его не удалить) — отказ до установки awaitText.
+    if (!isPrivateChat(st)) return refuseSecretInGroup(st);
+    st.awaitText = { kind: "apikey", secret: true, data: {} };
+    await wizScreen(st,
+      tr(
+        `The saved ${cat.label} key was rejected. Send a new key in the next message — I'll delete it from the chat right away.`,
+        `Сохранённый ключ ${cat.label} не принят. Пришли новый ключ следующим сообщением — я сразу удалю его из чата.`,
+      ),
+      [cancelRow()]);
+    return;
+  }
+  // Keep the currently configured model selectable even when the live list is long.
+  const current = env[cat.modelVar];
+  st.models = [...new Set([...(current ? [current] : []), ...models])].slice(0, 30);
+  const rows = st.models.map((m, i) => [btn(m, `iva_model:m:${i}`)]);
+  rows.push(cancelRow());
+  await wizScreen(st, tr(`Model (${cat.label}):`, `Модель (${cat.label}):`), rows);
+}
+
+// Codex device-link login. runDeviceCodeLogin polls up to 15 min — deliberately NOT
+// awaited, so the getUpdates loop keeps running; the continuation discards itself
+// when this state object is no longer the current wizard (cancelled/replaced).
+function startCodexLogin(st) {
+  // Serialize device-code log lines (link, one-time code) into ordered chat messages.
+  let q = Promise.resolve();
+  const tlog = (m) => { q = q.then(() => reply(st.chatId, String(m).trim())); };
+  runDeviceCodeLogin({ dataDir: DATA_DIR_ABS, lang: getLang(), log: tlog })
+    .then(() => {
+      // Identity-сверка: flows.get !== st истинно и когда слот заменён (другой /model,
+      // /menu), и когда протух по TTL — осиротевшая континуация сама себя отбрасывает.
+      if (flows.get(st.chatId, st.userId) !== st) return;
+      return showModelScreen(st);
+    })
+    .catch((e) => {
+      if (flows.get(st.chatId, st.userId) !== st) return;
+      return endWizard(st, tr(
+        "Login failed: " + e.message + "\nSend /model to try again.",
+        "Вход не удался: " + e.message + "\nОтправь /model, чтобы попробовать снова.",
+      ), menuRow());
+    });
+  return wizScreen(st, tr(
+    "Waiting for the OpenAI subscription login — link and code below. The code lives 15 minutes.",
+    "Жду вход по подписке OpenAI — ссылка и код ниже. Код живёт 15 минут.",
+  ), [cancelRow()]);
+}
+
+// Plain-text message while the wizard awaits an API key. Deleted from the chat FIRST;
+// the key value must never reach eve, log(), reply() or any error text.
+async function handleKeyMessage(msg, st) {
+  const chatId = msg.chat.id;
+  const del = await tg("deleteMessage", { chat_id: chatId, message_id: msg.message_id });
+  if (!del.ok) await reply(chatId, tr("Couldn't delete the message with the key — delete it manually.", "Не смог удалить сообщение с ключом — удали его вручную."));
+  const key = msg.text.trim();
+  // Not key-shaped (whitespace / too short) — most likely an ordinary message typed
+  // while the prompt was pending. Don't store it; end the wait so the chat works again.
+  if (!/^\S{8,}$/.test(key)) {
+    await endWizard(st,
+      tr(
+        "That doesn't look like an API key — the wait is cleared, I deleted the message just in case.\n" +
+        "If it was a question — send it again; come back for a key via /model.",
+        "Это не похоже на API-ключ — ожидание снято, сообщение удалил на всякий случай.\n" +
+        "Если это был вопрос — отправь его ещё раз; за ключом приходи через /model.",
+      ), menuRow());
+    return true;
+  }
+  const cat = CATALOG[st.provider];
+  const err = await checkKey(st.provider, key);
+  if (err) {
+    await wizScreen(st, tr(`Key rejected (${err}). Send another key or tap «Cancel».`, `Ключ не принят (${err}). Пришли другой ключ или нажми «Отмена».`), [cancelRow()]);
+    return true;
+  }
+  st.awaitText = null;
+  await upsertEnv(ENV_PATH, { [cat.keyVar]: key }); // persist immediately — the chat copy is gone
+  await showModelScreen(st);
+  return true;
+}
+
+async function saveWizard(st) {
+  const updates = { THINKING_EFFORT: st.effort }; // null ⇒ drop the line ("не задан")
+  if (st.flow === "model") {
+    updates.MODEL_PROVIDER = st.provider;
+    updates[CATALOG[st.provider].modelVar] = st.model;
+  }
+  await upsertEnv(ENV_PATH, updates);
+}
+
+async function showSaved(st) {
+  const { provider, model, effort } = await currentConfig();
+  let text = tr(`Saved: ${provider} · ${model} · thinking: ${effortLabel(effort)}.`, `Сохранил: ${provider} · ${model} · размышления: ${effortLabel(effort)}.`);
+  if (EFFORT_SET.has(effort) && provider !== "codex") {
+    text += tr(
+      "\nThe thinking level is saved in the profile, but natively applies only on codex.",
+      "\nУровень размышлений сохранён в профиле, но нативно применяется только на codex.",
+    );
+  }
+  text += tr("\nRestart the agent to apply?", "\nПерезапустить агента, чтобы применить?");
+  await wizScreen(st, text, [[btn(tr("Restart now", "Перезапустить сейчас"), "iva_model:rs:now"), btn(tr("Later", "Позже"), "iva_model:rs:later")]]);
+}
+
+// Inline-button taps for /model and /think. Mirrors handleUpdateCallback: ack the
+// spinner first, swallow untrusted taps, then dispatch on the wizard state.
+async function handleWizardCallback(cq) {
+  const from = String(cq.from?.id ?? "");
+  const chatId = cq.message?.chat?.id;
+  const messageId = cq.message?.message_id;
+  await tg("answerCallbackQuery", { callback_query_id: cq.id });
+  if (ALLOWED.size === 0 || !ALLOWED.has(from)) return true; // swallow untrusted taps
+  const action = cq.data.replace(/^iva_(model|think):/, "");
+  const st = getWizard(chatId, from);
+  // No state (bridge restarted / TTL) or a tap on an older wizard message → stale.
+  if (!st || (st.msgId && messageId && st.msgId !== messageId)) {
+    await tg("editMessageText", { chat_id: chatId, message_id: messageId, text: tr("This dialog has expired — send /model again.", "Диалог устарел — отправь /model заново.") });
+    return true;
+  }
+  if (action === "keep") {
+    await endWizard(st, st.flow === "think" ? tr("Kept the current thinking level.", "Оставил текущий уровень размышлений.") : tr("Kept the current configuration.", "Оставил текущую конфигурацию."), menuRow());
+    return true;
+  }
+  if (action === "cancel") {
+    await endWizard(st, tr("Cancelled.", "Отменено."), menuRow());
+    return true;
+  }
+  if (action === "chg") {
+    await showProviderScreen(st);
+    return true;
+  }
+  if (action.startsWith("prov:")) {
+    const p = action.slice("prov:".length);
+    if (CATALOG[p]) await pickProvider(st, p);
+    return true;
+  }
+  if (action.startsWith("m:")) {
+    const m = st.models?.[Number(action.slice("m:".length))];
+    if (!m) return true;
+    st.model = m;
+    await wizScreen(st, tr("Thinking level:", "Уровень размышлений:"), effortRows("iva_model", false));
+    return true;
+  }
+  if (action.startsWith("eff:")) {
+    const v = action.slice("eff:".length);
+    st.effort = EFFORT_SET.has(v) ? v : null; // "unset" and anything unknown ⇒ drop
+    try {
+      await saveWizard(st);
+    } catch (e) {
+      await endWizard(st, tr("Couldn't save .env: " + e.message, "Не удалось сохранить .env: " + e.message), menuRow());
+      return true;
+    }
+    await showSaved(st);
+    return true;
+  }
+  if (action === "rs:later") {
+    await endWizard(st, tr("Saved. It'll apply after a restart (/restart).", "Сохранил. Применится после перезапуска (/restart)."), menuRow());
+    return true;
+  }
+  if (action === "rs:now") {
+    await endWizard(st, tr("Restarting the agent… (~30s). The current conversation resumes after the restart.", "Перезапускаю агента… (~30 сек). Текущий диалог продолжится после перезапуска."), menuRow());
+    // Plain restart, NOT restartAgent(): a config change is not a recovery — parked
+    // conversations in .workflow-data survive and resume under the new model.
+    const ok = await sc("restart", "iva.service");
+    if (ok) {
+      const { provider, model, effort } = await currentConfig();
+      await reply(chatId, tr(`Done — the new configuration is active: ${provider} · ${model} · thinking: ${effortLabel(effort)}.`, `Готово — новая конфигурация активна: ${provider} · ${model} · размышления: ${effortLabel(effort)}.`));
+    } else {
+      await reply(chatId, tr("Couldn't restart (systemctl). Check the service on the server.", "Не удалось перезапустить (systemctl). Проверь сервис на сервере."));
+    }
+    return true;
+  }
+  return true;
+}
+
+export function resetMessageCopy(cmd, env = process.env, locale = getLang()) {
+  const pick = (en, ru) => (locale === "ru" ? ru : en);
+  const model = modelSummary(env);
+  const context = compactNumber(model.contextWindow);
+  return cmd === "/restart"
+    ? {
+        pending: pick("◇ Restarting Iva", "◇ Перезапускаю Iva"),
+        complete: pick(`♻️ Iva restarted\n\nModel: ${model.line}\nUnfinished turn cleared`, `♻️ Iva перезапущена\n\nМодель: ${model.line}\nНезавершённый ход очищен`),
+      }
+    : {
+        pending: pick("◇ Starting a new conversation", "◇ Начинаю новый диалог"),
+        complete: pick(`✨ New conversation ready\n\nModel: ${model.line}\nContext cleared · window ${context}`, `✨ Новый диалог готов\n\nМодель: ${model.line}\nКонтекст очищен · окно ${context}`),
+      };
+}
+
+// Движок /menu: делит session-store (flows) с визардами /model//think. deps — мост отдаёт
+// экранам всё нужное (пути, systemctl, доставку в eve, allowlist, хендофф в визарды).
+const menu = createMenu({
+  flows,
+  tg,
+  deps: {
+    envPath: ENV_PATH,
+    dataDir: DATA_DIR,
+    root: ROOT,
+    sc,
+    reply,
+    deliver: pacedDeliver, // синтетический deliver дистилляции обязан пейситься, как главный цикл
+    log,
+    allowed: ALLOWED,
+    handleModelCmd,
+    handleThinkCmd,
+  },
+});
+
+// setMyCommands: синее командное меню Telegram из общей таблицы COMMANDS (default=en +
+// language_code:"ru"). Идемпотентно, зовётся на каждом старте моста; ошибки нефатальны.
+async function registerBotCommands() {
+  try {
+    await tg("setMyCommands", { commands: botCommands("en") });
+    await tg("setMyCommands", { commands: botCommands("ru"), language_code: "ru" });
+  } catch (e) {
+    log("setMyCommands failed:", e.message);
+  }
+}
+
+// Control commands are handled by the BRIDGE (out-of-band) — they work even if the agent is stuck.
+// Trusted IDs only. Returns true if the command was handled (we do NOT deliver it to eve).
+async function handleControl(update) {
+  // Bridge-owned inline-button taps (/update, /model, /think) — not eve HITL callbacks.
+  const cq = update.callback_query;
+  if (cq && typeof cq.data === "string") {
+    if (cq.data.startsWith("iva_update:")) return handleUpdateCallback(cq);
+    // Wizard errors must not escape: an uncaught throw would crash the bridge and
+    // re-poll the update after restart. Consume the tap either way.
+    if (cq.data.startsWith("iva_model:") || cq.data.startsWith("iva_think:")) {
+      return handleWizardCallback(cq).catch((e) => {
+        log("wizard callback error:", e.message);
+        return true;
+      });
+    }
+    // /menu: тот же принцип consume-on-error — тап меню всегда проглатывается (в eve не уходит).
+    if (cq.data.startsWith("iva_menu:")) {
+      return menu.onCallback(cq).catch((e) => {
+        log("menu callback error:", e.message);
+        return true;
+      });
+    }
+  }
+  const msg = update.message;
+  const text = (msg?.text || "").trim();
+  // A pending flow (menu screen or /model wizard) awaiting text claims this user's next
+  // plain-text message (a key must never reach eve); a command aborts the wait — a silently
+  // still-visible prompt would invite pasting the key later, when nothing intercepts it.
+  // This runs BEFORE the busy-buffer gate (below), so a capture works even mid-turn.
+  if (msg?.from && text) {
+    const pending = getWizard(msg.chat?.id, String(msg.from.id));
+    if (pending?.awaitText) {
+      if (text.startsWith("/")) {
+        await endWizard(pending, tr("Cancelled — no longer waiting for input.", "Отменено — ожидание ввода снято.")).catch(() => {});
+      } else if (pending.flow === "menu") {
+        // Menu screens own their capture (interview / key intake / gws JSON / ubcred).
+        return menu.onText(msg, pending).catch((e) => {
+          log("menu capture error:", e.message); // e.message never contains a secret value
+          return true;
+        });
+      } else {
+        // /model wizard key intake — consume the update even on failure (the key must never
+        // be re-polled into eve). handleKeyMessage stays the wizard's own handler.
+        return handleKeyMessage(msg, pending).catch((e) => {
+          log("wizard key error:", e.message); // e.message never contains the key value
+          return true;
+        });
+      }
+    }
+  }
+  if (!text.startsWith("/")) return false;
+  const cmd = text.split(/\s+/)[0].replace(/@\w+$/, "").toLowerCase();
+  if (!["/menu", "/help", "/stop", "/usage", "/restart", "/new", "/clear", "/compact", "/update", "/model", "/think"].includes(cmd)) return false;
+  const from = String(msg?.from?.id ?? "");
+  if (ALLOWED.size === 0 || !ALLOWED.has(from)) return false; // untrusted — let eve drop it
+  const chatId = msg?.chat?.id;
+  // /menu — open the nested settings menu (out-of-band; errors consumed, never reach eve).
+  if (cmd === "/menu") {
+    await menu.open(chatId, from).catch((e) => log("menu error:", e.message));
+    return true;
+  }
+  if (cmd === "/help") {
+    await reply(chatId, helpText());
+    return true;
+  }
+  // /stop — interrupt the current turn. Same path as the ⏹ Stop button: we synthesize a
+  // callback_query with data "iva_cancel"; the channel resolves sessionId from run-status
+  // and resumes eve's cancel hook. Out-of-band so it reaches a busy agent (an ordinary
+  // message would be queued by the gate below and never processed).
+  if (cmd === "/stop") {
+    const key = chatKey(update);
+    if (!key || !isRunning(key)) {
+      await reply(chatId, tr("Nothing is running right now.", "Сейчас ничего не выполняется."));
+      return true;
+    }
+    await deliver({
+      update_id: 0,
+      callback_query: {
+        id: `ivastop-${Date.now()}`, // synthetic: answerCallbackQuery on it fails, channel tolerates
+        from: msg.from,
+        message: msg, // carries chat/thread — the channel derives chatKey from here
+        data: "iva_cancel",
+      },
+    });
+    return true;
+  }
+  // /usage — token spend from data/usage.jsonl. Out-of-band and FREE (we don't call the model).
   if (cmd === "/usage") {
     const arg = text.split(/\s+/).slice(1).join(" ");
     try {
@@ -206,59 +785,55 @@ async function handleControl(update) {
     }
     return true;
   }
-  // /provider — смена провайдера модели (обновляет .env и перезапускает сервис).
-  if (cmd === "/provider") {
-    const requested = text.split(/\s+/).slice(1).join(" ").trim().toLowerCase();
-    if (!requested) {
-      await reply(chatId, "Укажи провайдер: /provider <ollama|opencode|kimi|gemini|openai>");
-      return true;
-    }
-    if (!VALID_PROVIDERS.has(requested)) {
-      await reply(chatId, `Неизвестный провайдер «${requested}». Доступны: ${[...VALID_PROVIDERS].join(", ")}.`);
-      return true;
-    }
-    try {
-      await updateModelProvider(requested);
-    } catch (e) {
-      await reply(chatId, `Не смог обновить .env: ${e.message}`);
-      return true;
-    }
-    await reply(chatId, `Меняю провайдер на ${requested} и перезапускаю агента…`);
-    // Рестартуем только iva.service, а не весь набор (иначе этот же сервис
-    // iva-telegram-poll убивается посреди обработки команды и может
-    // переобработать ту же команду).
-    const ok = await sc("restart", "iva.service");
-    await reply(chatId, ok ? `Готово — теперь провайдер ${requested}. Пиши.` : "Не смог перезапустить агента. Проверь сервис на сервере.");
+  // /update — check upstream; if newer, offer inline Update/Skip buttons. Out-of-band.
+  if (cmd === "/update") {
+    await handleUpdateCheck(chatId);
     return true;
   }
-
-  // /restart, /new, /clear, /compact → перезапуск процесса (надёжный сброс/recovery).
-  await reply(chatId, cmd === "/restart" ? "Перезапускаю агента…" : "Начинаю заново — перезапускаю сессию…");
+  // /model, /think — provider/model/effort wizard (writes .env; applied on restart).
+  if (cmd === "/model") {
+    await handleModelCmd(chatId, from).catch((e) => log("wizard /model error:", e.message));
+    return true;
+  }
+  if (cmd === "/think") {
+    await handleThinkCmd(chatId, from).catch((e) => log("wizard /think error:", e.message));
+    return true;
+  }
+  // /restart, /new, /clear, /compact → process restart (reliable reset/recovery).
+  // Fresh .env, not this process's snapshot — see the same note in handleUpdateCheck.
+  const resetCopy = resetMessageCopy(cmd, await readEnvFresh(ENV_PATH));
+  const status = await reply(chatId, resetCopy.pending);
   const ok = await restartAgent();
-  await reply(chatId, ok ? "Готово — пиши." : "Не смог перезапустить (systemctl). Проверь сервис на сервере.");
+  if (!status) return true;
+  if (!ok) {
+    await edit(chatId, status.message_id, tr("⚠️ Couldn't restart Iva", "⚠️ Не удалось перезапустить Iva"));
+    return true;
+  }
+  await edit(chatId, status.message_id, resetCopy.complete);
   return true;
 }
 
 async function main() {
-  log(`telegram-poll старт → ${ROUTE}`);
-  // Первый запуск (нет offset-файла) — сбрасываем накопленный install-бэклог (drop_pending=true),
-  // чтобы старое не реплеилось пачкой → параллельные сессии на один чат (HookConflict).
-  // На последующих стартах бэклог НЕ дропаем (не теряем сообщения, пришедшие пока мост лежал).
+  if (!TOKEN) throw new Error("no TELEGRAM_BOT_TOKEN in .env — nothing to poll");
+  if (!SECRET) throw new Error("no TELEGRAM_WEBHOOK_SECRET_TOKEN — the channel won't accept updates");
+  log(`telegram-poll start → ${ROUTE}`);
+  await removeStaleUpdateJobs();
+  // First run (no offset file) — drop the accumulated install backlog (drop_pending=true),
+  // so old messages don't replay in a batch → parallel sessions on one chat (HookConflict).
+  // On subsequent starts we do NOT drop the backlog (don't lose messages that arrived while the bridge was down).
   const firstRun = !existsSync(OFFSET_FILE);
   const dw = await tg("deleteWebhook", { drop_pending_updates: firstRun });
-  log("deleteWebhook:", dw.ok ? `ок (drop_pending=${firstRun})` : dw.description);
+  log("deleteWebhook:", dw.ok ? `ok (drop_pending=${firstRun})` : dw.description);
+  await registerBotCommands();
 
   let offset = await loadOffset();
   if (offset === null) {
     offset = await fastForwardOffset();
-    log("первый запуск — offset за хвостом очереди:", offset);
+    log("first run — offset past the tail of the queue:", offset);
     await saveOffset(offset);
   } else {
-    log("стартовый offset:", offset);
+    log("starting offset:", offset);
   }
-
-  // Время последней доставки по ключу чата — для паузы SETTLE_MS между апдейтами чата.
-  const lastDeliverAt = new Map();
 
   for (;;) {
     let data;
@@ -269,13 +844,13 @@ async function main() {
         allowed_updates: ["message", "callback_query"],
       });
     } catch (e) {
-      log("getUpdates сеть:", e.message);
+      log("getUpdates network:", e.message);
       await sleep(3000);
       continue;
     }
     if (!data.ok) {
       log("getUpdates:", data.description);
-      // 409/конфликт — где-то остался webhook; снимаем и пробуем снова.
+      // 409/conflict — a webhook is left somewhere; remove it and try again.
       if (/409|conflict|webhook/i.test(data.description || "")) {
         await tg("deleteWebhook", { drop_pending_updates: false });
       }
@@ -283,31 +858,57 @@ async function main() {
       continue;
     }
     for (const update of data.result || []) {
-      // Управляющие команды (/restart, /help, /new) — мост обрабатывает сам, в eve не шлёт.
+      // Control commands (/restart, /help, /new) — the bridge handles them itself, doesn't send to eve.
       if (await handleControl(update)) {
         offset = update.update_id + 1;
         await saveOffset(offset);
         continue;
       }
       const key = chatKey(update);
-      // Не доставлять следующий апдейт того же чата, пока eve не запарковал предыдущий ход
-      // (пауза от момента прошлой доставки в этот чат) — иначе бёрст → HookConflict.
-      if (key !== null && SETTLE_MS > 0) {
-        const prev = lastDeliverAt.get(key);
-        if (prev !== undefined) {
-          const wait = SETTLE_MS - (Date.now() - prev);
-          if (wait > 0) await sleep(wait);
+      // ESC-stop queue gate (messages only): while a turn is running for this chat, buffer
+      // the message instead of delivering. callback_query always passes (eve HITL buttons
+      // and ⏹ Стоп must reach a busy agent). Replies to bot messages also pass — that's
+      // how HITL ForceReply answers arrive; queueing one would deadlock the waiting turn.
+      if (update.message && key !== null && update.message.reply_to_message?.from?.is_bot !== true) {
+        if (isRunning(key)) {
+          const entry = bufferEntryOf(update.message);
+          if (entry !== null) {
+            const q = await loadQueue();
+            (q[key] ??= []).push(entry);
+            await saveQueue(q);
+            // Silent ack: a 👀 reaction on the user's message (no extra chat message).
+            await tg("setMessageReaction", {
+              chat_id: update.message.chat.id,
+              message_id: update.message.message_id,
+              reaction: [{ type: "emoji", emoji: "👀" }],
+            }).catch((e) => log("reaction failed:", e.message));
+          }
+          offset = update.update_id + 1;
+          await saveOffset(offset);
+          continue;
+        }
+        // Idle again: the next fresh message carries the queued ones along.
+        const q = await loadQueue();
+        const pending = q[key];
+        if (Array.isArray(pending) && pending.length) {
+          update.message.iva_buffered = pending;
+          delete q[key];
+          await saveQueue(q);
         }
       }
-      await deliver(update); // ждём успешной доставки — порядок и без потерь
-      if (key !== null) lastDeliverAt.set(key, Date.now());
+      // Don't deliver the next update of the same chat until eve has parked the previous turn
+      // (pause measured from the last delivery to this chat) — otherwise a burst → HookConflict.
+      // pacedDeliver держит lastDeliverAt на модуль-уровне, общую с deps.deliver меню.
+      await pacedDeliver(update);
       offset = update.update_id + 1;
       await saveOffset(offset);
     }
   }
 }
 
-main().catch((e) => {
-  console.error("telegram-poll фатально:", e);
-  process.exit(1);
-});
+if (fileURLToPath(import.meta.url) === process.argv[1]) {
+  main().catch((e) => {
+    console.error("telegram-poll fatal:", e);
+    process.exit(1);
+  });
+}

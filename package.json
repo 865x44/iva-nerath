@@ -1,6 +1,6 @@
 {
   "name": "iva",
-  "version": "0.1.6",
+  "version": "0.3.0",
   "type": "module",
   "bin": {
     "iva": "bin/iva.mjs"
@@ -19,30 +19,31 @@
     "init-vault": "node scripts/init-vault.mjs",
     "digest": "node scripts/daily-digest.ts",
     "poll": "node --env-file=.env scripts/telegram-poll.mjs",
-    "chat": "node --env-file=.env scripts/tui-chat.mjs",
     "memory": "node --env-file=.env scripts/memory/rollup.ts",
     "doctor": "node --env-file=.env scripts/memory/doctor.ts",
-    "test": "node --experimental-strip-types --experimental-loader ./resolve-js-to-ts.mjs --test tests/*.test.ts",
     "typecheck": "tsgo",
-    "tui": "node --env-file=.env scripts/tui.mjs"
+    "test:update-ui": "node --test scripts/lib/update-ui.test.mjs scripts/lib/update-check.test.mjs",
+    "postinstall": "patch-package"
   },
   "dependencies": {
-    "@ai-sdk/openai-compatible": "^3.0.0-beta.57",
+    "@ai-sdk/openai": "4.0.15",
+    "@ai-sdk/openai-compatible": "^3.0.11",
     "@vercel/connect": "0.2.2",
-    "ai": "7.0.0-beta.178",
-    "blessed": "^0.1.81",
-    "eve": "^0.11.4",
+    "ai": "7.0.29",
+    "eve": "0.24.4",
+    "just-bash": "^3.0.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/node": "24.x",
-    "@typescript/native-preview": "7.0.0-dev.20260523.1"
+    "@typescript/native-preview": "7.0.0-dev.20260523.1",
+    "patch-package": "^8.0.1"
   },
   "overrides": {
-    "ai": "7.0.0-beta.178"
+    "ai": "7.0.29"
   },
   "resolutions": {
-    "ai": "7.0.0-beta.178"
+    "ai": "7.0.29"
   },
   "engines": {
     "node": "24.x"
