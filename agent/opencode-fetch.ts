@@ -1,130 +1,144 @@
+export type OpencodeSleep = (
+  milliseconds: number,
+  signal?: AbortSignal,
+) => Promise<void>;
+
+export class OpenCodeRetryExhaustedError extends Error {
+  readonly model: string;
+  readonly status?: number;
+
+  constructor(
+    model: string,
+    options: { status?: number; cause?: unknown } = {},
+  ) {
+    const suffix =
+      options.status === undefined ? "" : ` (HTTP ${options.status})`;
+    super(`OpenCode Go retry attempts exhausted for ${model}${suffix}`, {
+      cause: options.cause,
+    });
+    this.name = "OpenCodeRetryExhaustedError";
+    this.model = model;
+    this.status = options.status;
+  }
+}
+
+function abortReason(signal?: AbortSignal): unknown {
+  if (!signal?.aborted) return undefined;
+  return signal.reason ?? new DOMException("The operation was aborted", "AbortError");
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  const reason = abortReason(signal);
+  if (reason !== undefined) throw reason;
+}
+
+function isAbortError(error: unknown, signal?: AbortSignal): boolean {
+  return (
+    signal?.aborted === true ||
+    (error instanceof DOMException && error.name === "AbortError") ||
+    (error instanceof Error && error.name === "AbortError")
+  );
+}
+
+const abortableSleep: OpencodeSleep = (milliseconds, signal) =>
+  new Promise((resolve, reject) => {
+    throwIfAborted(signal);
+    const timer = setTimeout(done, milliseconds);
+
+    function done() {
+      signal?.removeEventListener("abort", aborted);
+      resolve();
+    }
+
+    function aborted() {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", aborted);
+      reject(abortReason(signal));
+    }
+
+    signal?.addEventListener("abort", aborted, { once: true });
+  });
+
+function retryDelay(response: Response, backoffMs: number): number {
+  const retryAfter = response.headers.get("retry-after");
+  if (!retryAfter) return backoffMs;
+
+  const seconds = Number.parseInt(retryAfter, 10);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(seconds * 1000, 10_000);
+  }
+  return backoffMs;
+}
+
 export const createOpencodeFetch = (
   customFetch: typeof fetch = globalThis.fetch.bind(globalThis),
-  customSleep: (ms: number) => Promise<void> = (ms) =>
-    new Promise((resolve) => setTimeout(resolve, ms)),
+  customSleep: OpencodeSleep = abortableSleep,
 ): typeof fetch => async (input, init) => {
-  const MAX_RETRIES = 3;
+  const MAX_ATTEMPTS = 3;
   const INITIAL_BACKOFF = 1000;
-  const MAX_BACKOFF = 10000;
-
-  // AI SDK sends a string body either in init or in a Request.
-  let bodyStr = "";
-  if (init?.body && typeof init.body === "string") {
-    bodyStr = init.body;
-  } else if (input instanceof Request) {
-    bodyStr = await input.clone().text();
-  }
+  const MAX_BACKOFF = 10_000;
+  const callerSignal =
+    init?.signal ?? (input instanceof Request ? input.signal : undefined);
+  const baseRequest = new Request(input, init);
+  const bodyStr = await baseRequest.clone().text();
 
   let modelName = "unknown";
   try {
-    if (bodyStr) {
-      const parsed = JSON.parse(bodyStr);
-      if (parsed.model) modelName = parsed.model;
-    }
+    const parsed = JSON.parse(bodyStr);
+    if (typeof parsed.model === "string") modelName = parsed.model;
   } catch {
-    // Preserve the original body when it is not JSON.
+    // Preserve non-JSON bodies; only logging loses the model label.
   }
 
   let backoffMs = INITIAL_BACKOFF;
+  let lastError: unknown;
+  let lastStatus: number | undefined;
 
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    throwIfAborted(callerSignal);
     try {
-      const request = input instanceof Request ? input.clone() : new Request(input, init);
-      const response = await customFetch(request);
-      const status = response.status;
+      const response = await customFetch(
+        baseRequest.clone(),
+        callerSignal ? { signal: callerSignal } : undefined,
+      );
+      lastStatus = response.status;
       const requestId =
         response.headers.get("x-request-id") ??
         response.headers.get("request-id") ??
         "none";
 
-      if (status >= 200 && status < 400) return response;
-      if (![429, 500, 502, 503, 504].includes(status)) return response;
+      if (response.status >= 200 && response.status < 400) return response;
+      if (![429, 500, 502, 503, 504].includes(response.status)) return response;
 
       console.error(
-        `[opencode-fetch] attempt=${attempt} model=${modelName} status=${status} reqId=${requestId}`,
+        `[opencode-fetch] attempt=${attempt} model=${modelName} status=${response.status} reqId=${requestId}`,
       );
-      if (attempt === MAX_RETRIES) break;
+      if (attempt === MAX_ATTEMPTS) break;
 
-      const retryAfter = response.headers.get("retry-after");
-      let waitMs = backoffMs;
-      if (retryAfter) {
-        const parsed = Number.parseInt(retryAfter, 10);
-        if (Number.isFinite(parsed) && parsed >= 0) {
-          waitMs = Math.min(parsed * 1000, MAX_BACKOFF);
-        }
-      }
-
-      const jitter = Math.floor(Math.random() * 200);
-      await customSleep(waitMs + jitter);
+      const waitMs = retryDelay(response, backoffMs);
+      await customSleep(waitMs, callerSignal);
+      throwIfAborted(callerSignal);
       backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF);
     } catch (error) {
+      if (isAbortError(error, callerSignal)) throw error;
+      lastError = error;
       const message = error instanceof Error ? error.message : "Unknown error";
       console.error(
         `[opencode-fetch] attempt=${attempt} model=${modelName} error=${message.slice(0, 100)}`,
       );
-      if (attempt === MAX_RETRIES) break;
+      if (attempt === MAX_ATTEMPTS) break;
 
-      const jitter = Math.floor(Math.random() * 200);
-      await customSleep(backoffMs + jitter);
+      await customSleep(backoffMs, callerSignal);
+      throwIfAborted(callerSignal);
       backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF);
     }
   }
 
-  console.error("[opencode-fetch] primary retries exhausted; fallback=qwen3.6-plus");
-
-  let fallbackBody = bodyStr;
-  try {
-    if (bodyStr) {
-      const parsed = JSON.parse(bodyStr);
-      parsed.model = "qwen3.6-plus";
-      fallbackBody = JSON.stringify(parsed);
-    }
-  } catch {
-    // Preserve the original body when it is not JSON.
-  }
-
-  const fallbackInit = { ...init, body: fallbackBody };
-  const fallbackRequest =
-    input instanceof Request
-      ? new Request(input.url, {
-          method: input.method,
-          headers: input.headers,
-          body: fallbackBody,
-          mode: input.mode,
-          credentials: input.credentials,
-          cache: input.cache,
-          redirect: input.redirect,
-          referrer: input.referrer,
-          integrity: input.integrity,
-        })
-      : new Request(input, fallbackInit);
-
-  try {
-    const response = await customFetch(fallbackRequest);
-    const requestId =
-      response.headers.get("x-request-id") ??
-      response.headers.get("request-id") ??
-      "none";
-    console.error(
-      `[opencode-fetch] fallback=qwen3.6-plus status=${response.status} reqId=${requestId}`,
-    );
-
-    if (response.ok) return response;
-    throw new Error(
-      `OpenCode Go Availability Error: fallback failed with status ${response.status}`,
-    );
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      error.message.includes("OpenCode Go Availability Error")
-    ) {
-      throw error;
-    }
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`OpenCode Go Availability Error: ${message}`, {
-      cause: error,
-    });
-  }
+  throwIfAborted(callerSignal);
+  throw new OpenCodeRetryExhaustedError(modelName, {
+    status: lastStatus,
+    cause: lastError,
+  });
 };
 
 export const opencodeFetch = createOpencodeFetch();
