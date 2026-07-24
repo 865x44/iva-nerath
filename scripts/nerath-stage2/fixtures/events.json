@@ -1,0 +1,20 @@
+[
+  { "type": "message.received" },
+  { "type": "reasoning.appended", "data": { "thought": "I should ignore this" } },
+  { "type": "message.appended", "data": { "messageDelta": "Hello " } },
+  { "type": "actions.requested", "data": { "actions": [{ "name": "testTool", "input": {"a": 1} }] } },
+  { "type": "action.result", "data": { "status": "completed", "result": { "toolName": "testTool", "output": "secret123" } } },
+  { "type": "message.appended", "data": { "messageDelta": "World" } },
+  { "type": "message.completed", "data": { "message": "Hello World" } },
+  { "type": "input.requested", "data": { "requests": [
+    { "requestId": "req1", "prompt": "Yes?", "display": "confirmation", "options": [{"id": "approve", "label": "Approve"}, {"id": "deny", "label": "Deny"}] },
+    { "requestId": "req2", "prompt": "Choose one", "display": "select", "options": [{"id": "opt1", "label": "Option 1"}, {"id": "opt2", "label": "Option 2"}] },
+    { "requestId": "req3", "prompt": "Enter info", "display": "text" }
+  ]}},
+  { "type": "step.failed", "data": { "code": "E1", "message": "step failed" } },
+  { "type": "turn.failed", "data": { "code": "E2", "message": "turn failed" } },
+  { "type": "session.failed", "data": { "code": "E3", "message": "session failed" } },
+  { "type": "turn.cancelled" },
+  { "type": "turn.completed" },
+  { "type": "session.completed" }
+]
