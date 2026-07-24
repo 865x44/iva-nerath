@@ -28,10 +28,13 @@ const primaryModel =
     : compatibleProvider!(cfg.textModel);
 
 const textModel =
-  providerName === "opencode"
+  providerName === "opencode" &&
+  cfg.fallbackModel &&
+  cfg.fallbackModel !== cfg.textModel
     ? withOpenCodeStreamFallback(
         primaryModel,
-        compatibleProvider!("qwen3.6-plus"),
+        compatibleProvider!(cfg.fallbackModel),
+        cfg.fallbackModel,
       )
     : primaryModel;
 
