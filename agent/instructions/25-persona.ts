@@ -8,10 +8,13 @@ import { join } from "node:path";
 // (инструкции — не часть сжимаемой истории диалога), применяется со следующего
 // сообщения без рестарта (квиз пишет файл — инструкция его подхватывает на очередном
 // турне). Самодостаточна — только eve + node fs/path (гоча eve 0.11.4).
+import { isNerathModeOn } from "../../scripts/lib/nerath-mode.mjs";
+
 const VAULT = process.env.ASSISTANT_VAULT_DIR ?? "vault";
 const MAX_CHARS = 800; // жёсткий лимит персоны — держим always-on пол плоским.
 
 function personaMarkdown(): string {
+  if (isNerathModeOn()) return "";
   let persona: string;
   try {
     persona = readFileSync(join(VAULT, "PERSONA.md"), "utf8").trim();
