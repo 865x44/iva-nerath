@@ -8,6 +8,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { QUIZ, QUIZ_ANSWERS, scoreQuiz, quizSummary, personaMarkdown } from "../quiz.mjs";
+import { isNerathModeOn } from "../nerath-mode.mjs";
 
 const SID = "chr";
 const PARENT = "r";
@@ -58,6 +59,15 @@ export default {
 
   // Заход на экран (verb o) — интро-предупреждение. Квиз стартует по кнопке go.
   render(st, ctx) {
+    if (isNerathModeOn()) {
+      return {
+        text: ctx.tr(
+          "🎭 Iva's character is disabled in Nerath mode.",
+          "🎭 Характер Ивы отключён в режиме Нерат.",
+        ),
+        rows: [ctx.backRow(PARENT)],
+      };
+    }
     const text = [
       ctx.tr("🎭 Iva's character", "🎭 Характер Ивы"),
       "",
@@ -73,6 +83,16 @@ export default {
   },
 
   async on(verb, args, st, ctx) {
+    if (isNerathModeOn()) {
+      return ctx.flows.screen(
+        st,
+        ctx.tr(
+          "🎭 Iva's character is disabled in Nerath mode.",
+          "🎭 Характер Ивы отключён в режиме Нерат.",
+        ),
+        [ctx.backRow(PARENT)],
+      );
+    }
     if (verb === "go" || verb === "redo") {
       st.data.quiz = { i: 0, answers: [], code: null };
       return renderQuestion(st, ctx);
