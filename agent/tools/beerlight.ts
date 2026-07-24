@@ -15,7 +15,7 @@ const BEERLIGHT_PYTHON =
   process.env.BEERLIGHT_PYTHON || join(BEERLIGHT_REPO, ".venv/bin/python");
 
 // run-операции — 2 LLM-вызова по 2–5 минут; timeout с запасом
-const RUN_TIMEOUT = 420_000; // 7 минут
+const RUN_TIMEOUT = 600_000; // 10 минут (запас над наблюдавшимися 487s)
 const FAST_TIMEOUT = 60_000; // 1 минута
 const MAX_ERROR_CHARS = 2000;
 
@@ -173,7 +173,7 @@ export default defineTool({
     "session — управление сессией (create/run/update/show/event/outcomes); " +
     "inspect — инспекция трасс; handoff — экспорт сессии. " +
     "Перед вызовом загрузи скилл `beerlight`. " +
-    "run_json и session run — долгие (до 7 мин), остальные — быстрые.",
+    "run_json и session run — долгие (до 10 мин), остальные — быстрые.",
 
   inputSchema: BeerlightInput,
 

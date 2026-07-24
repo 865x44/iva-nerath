@@ -154,7 +154,7 @@ describe("beerlight session", () => {
     assert.ok(result.stdout.includes("Session created"));
   });
 
-  it("session run — длинный таймаут, проброс --task", async () => {
+  it("session run — длинный таймаут (600s), проброс --task", async () => {
     process.env.BEERLIGHT_PYTHON = shimPath;
     delete process.env.BEERLIGHT_SHIM_EXIT;
 
@@ -168,6 +168,17 @@ describe("beerlight session", () => {
 
     assert.equal(result.exitCode, 0);
     assert.ok(result.stdout.includes("Run OK"));
+  });
+
+  it("session run и run_json используют и объявляют 10-минутный лимит", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const source = await readFile(
+      new URL("../agent/tools/beerlight.ts", import.meta.url),
+      "utf8",
+    );
+
+    assert.match(source, /const RUN_TIMEOUT = 600_000/);
+    assert.match(source, /до 10 мин/);
   });
 
   it("session event — проброс run_id/candidate_id/type", async () => {
