@@ -54,3 +54,9 @@
 - Next: Протестировать /provider из Telegram ещё раз.
 - Gate: node-24 --check scripts/telegram-poll.mjs OK; typecheck OK; diff --check OK; сервисы стабильно активны.
 
+## 2026-07-24 15:04 — handoff close
+
+- Summary: G0-N1b завершены; Phase R harness/corpus принят primary: 33/0, corpus validation и git diff --check PASS. Controlled Codex Luna replay BLOCKED_NOT_RUN; benefit не доказан. Phase V не начата; candidate commits отсутствуют.
+- Next: В свежей Terra /orc продолжить только Phase V из candidate worktree: исправить provenance R-report, выполнить focused/full Node 24 tests, typecheck, build, verify-baseline, manifest/root checks, независимый diff/source audit и live/release invariant audit; не коммитить без законно пройденных replay/full gates; выпустить final candidate report и остановиться на IVA_NERATH_CORE_CANDIDATE_REPORTED.
+- Gate: Candidate branch feature/nerat-memory-firewall, HEAD exact r1 1ee221b39a8e7bf46e80305246293a7f627f78af, dirty only candidate artifacts. N1a PASS 5/0; N1b PASS 7/0 + menu 5/0; R PASS 33/0 + validate + diff-check. Live/release/deployment untouched. External replay not run; Phase V not started; no commits.
+
