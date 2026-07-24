@@ -1,75 +1,67 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createOpencodeFetch } from "../agent/opencode-fetch.js";
+import {
+  createOpencodeFetch,
+  OpenCodeRetryExhaustedError,
+  type OpencodeSleep,
+} from "../agent/opencode-fetch.js";
 
-const fastSleep = async () => {};
+const fastSleep: OpencodeSleep = async () => {};
 
-test("503 then 200 retries primary and preserves request payload", async () => {
+test("503 then 200 retries the same model and preserves payload", async () => {
   let callCount = 0;
-  let receivedBody = "";
+  const bodies: string[] = [];
   const mockFetch: typeof fetch = async (input) => {
     callCount++;
-    receivedBody = input instanceof Request ? await input.clone().text() : "";
-    if (callCount === 1) {
-      return new Response("Service Unavailable", {
-        status: 503,
-        headers: { "retry-after": "0" },
-      });
-    }
-    return new Response('{"success":true}', { status: 200 });
+    bodies.push(input instanceof Request ? await input.clone().text() : "");
+    return callCount === 1
+      ? new Response("Service Unavailable", {
+          status: 503,
+          headers: { "retry-after": "0" },
+        })
+      : new Response('{"success":true}', { status: 200 });
   };
-
   const originalBody = JSON.stringify({
-    model: "deepseek-v4-flash",
+    model: "deepseek-v4-pro",
     stream: true,
     stream_options: { include_usage: true },
   });
+
   const response = await createOpencodeFetch(mockFetch, fastSleep)(
     "https://opencode.ai/zen/go/v1/chat/completions",
     { method: "POST", body: originalBody },
   );
 
-  assert.equal(callCount, 2);
   assert.equal(response.status, 200);
-  assert.equal(receivedBody, originalBody);
+  assert.equal(callCount, 2);
+  assert.deepEqual(bodies, [originalBody, originalBody]);
 });
 
-test("exhausted recoverable failures use exactly one qwen fallback", async () => {
+test("exhausted recoverable failures throw without mutating the model", async () => {
   let callCount = 0;
-  let lastBody = "";
+  const bodies: string[] = [];
   const mockFetch: typeof fetch = async (input) => {
     callCount++;
-    lastBody = input instanceof Request ? await input.clone().text() : "";
-    return callCount <= 3
-      ? new Response("Bad Gateway", {
-          status: 502,
-          headers: { "retry-after": "0" },
-        })
-      : new Response("Fallback success", { status: 200 });
+    bodies.push(input instanceof Request ? await input.clone().text() : "");
+    return new Response("Bad Gateway", { status: 502 });
   };
+  const body = JSON.stringify({ model: "deepseek-v4-pro", stream: true });
 
-  const response = await createOpencodeFetch(mockFetch, fastSleep)(
-    "https://opencode.ai/zen/go/v1/chat/completions",
-    {
+  await assert.rejects(
+    createOpencodeFetch(mockFetch, fastSleep)("https://example.com", {
       method: "POST",
-      body: JSON.stringify({
-        model: "deepseek-v4-flash",
-        stream: true,
-        stream_options: { include_usage: true },
-      }),
-    },
+      body,
+    }),
+    (error) =>
+      error instanceof OpenCodeRetryExhaustedError &&
+      error.model === "deepseek-v4-pro" &&
+      error.status === 502,
   );
-
-  assert.equal(callCount, 4);
-  assert.equal(response.status, 200);
-  assert.deepEqual(JSON.parse(lastBody), {
-    model: "qwen3.6-plus",
-    stream: true,
-    stream_options: { include_usage: true },
-  });
+  assert.equal(callCount, 3);
+  assert.deepEqual(bodies, [body, body, body]);
 });
 
-test("non-recoverable 400 does not retry or fall back", async () => {
+test("non-recoverable 400 is returned without retry", async () => {
   let callCount = 0;
   const mockFetch: typeof fetch = async () => {
     callCount++;
@@ -80,7 +72,7 @@ test("non-recoverable 400 does not retry or fall back", async () => {
     "https://example.com",
     {
       method: "POST",
-      body: JSON.stringify({ model: "deepseek-v4-flash" }),
+      body: JSON.stringify({ model: "deepseek-v4-pro" }),
     },
   );
 
@@ -88,14 +80,65 @@ test("non-recoverable 400 does not retry or fall back", async () => {
   assert.equal(response.status, 400);
 });
 
-test("only the opencode provider receives the fetch wrapper", async () => {
-  const { readFile } = await import("node:fs/promises");
-  const agentSource = await readFile(
-    new URL("../agent/agent.ts", import.meta.url),
-    "utf8",
+test("preserves the caller AbortSignal in every retry attempt", async () => {
+  const controller = new AbortController();
+  const seenSignals: Array<AbortSignal | null | undefined> = [];
+  const mockFetch: typeof fetch = async (input, init) => {
+    seenSignals.push(init?.signal);
+    assert.equal(input instanceof Request, true);
+    return seenSignals.length === 1
+      ? new Response("retry", { status: 503 })
+      : new Response("ok", { status: 200 });
+  };
+
+  await createOpencodeFetch(mockFetch, fastSleep)("https://example.com", {
+    method: "POST",
+    body: JSON.stringify({ model: "deepseek-v4-pro" }),
+    signal: controller.signal,
+  });
+
+  assert.deepEqual(seenSignals, [controller.signal, controller.signal]);
+});
+
+test("abort during fetch is terminal and starts no retry", async () => {
+  const controller = new AbortController();
+  let callCount = 0;
+  const mockFetch: typeof fetch = async (_input, init) => {
+    callCount++;
+    controller.abort(new DOMException("stop", "AbortError"));
+    throw init?.signal?.reason;
+  };
+
+  await assert.rejects(
+    createOpencodeFetch(mockFetch, fastSleep)("https://example.com", {
+      method: "POST",
+      body: JSON.stringify({ model: "deepseek-v4-pro" }),
+      signal: controller.signal,
+    }),
+    { name: "AbortError" },
   );
-  assert.match(
-    agentSource,
-    /fetch: providerName === "opencode" \? opencodeFetch : undefined/,
+  assert.equal(callCount, 1);
+});
+
+test("abort during backoff cancels sleep and starts no next attempt", async () => {
+  const controller = new AbortController();
+  let callCount = 0;
+  const mockFetch: typeof fetch = async () => {
+    callCount++;
+    return new Response("retry", { status: 503 });
+  };
+  const abortingSleep: OpencodeSleep = async (_milliseconds, signal) => {
+    controller.abort(new DOMException("stop", "AbortError"));
+    throw signal?.reason;
+  };
+
+  await assert.rejects(
+    createOpencodeFetch(mockFetch, abortingSleep)("https://example.com", {
+      method: "POST",
+      body: JSON.stringify({ model: "deepseek-v4-pro" }),
+      signal: controller.signal,
+    }),
+    { name: "AbortError" },
   );
+  assert.equal(callCount, 1);
 });
