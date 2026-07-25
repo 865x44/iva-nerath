@@ -23,7 +23,9 @@ const PROVIDERS = {
   },
   opencode: {
     // Продукт переименован Zen → Go, но API живёт на легаси-пути /zen/ (у /go/v1 — 404).
-    baseURL: "https://opencode.ai/zen/go/v1",
+    // OPENCODE_BASE_URL позволяет указать любой OpenAI-совместимый эндпоинт (напр. alibaba
+    // token-plan для Qwen); дефолт — OpenCode Go.
+    baseURL: process.env.OPENCODE_BASE_URL ?? "https://opencode.ai/zen/go/v1",
     apiKey: process.env.OPENCODE_API_KEY,
     // Эндпоинт ждёт bare-ID — срезаем внутренний UI-префикс "opencode-go/" из дефолта и старых .env.
     textModel: (process.env.OPENCODE_MODEL ?? "deepseek-v4-pro").replace(/^opencode-go\//, ""),
