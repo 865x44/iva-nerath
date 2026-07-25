@@ -161,3 +161,74 @@ currently a worker re-implementation, not merged); decide whether to commit; liv
 - Combined with the 99/99 worktree test suite, the reconstruction is verified at code + runtime-instruction
   level. Only a live model reply remains unproven, gated on the missing dependency + provider auth.
 - Production untouched; no stray processes (8726 free; production 8723 and old Brother 8725 left running).
+
+---
+
+## FINAL STATUS — dogfood-ready (supersedes the smoke-test record above)
+
+The smoke-test record above is historical: the dependency block was resolved (isolated `npm ci` +
+`OPENCODE_BASE_URL` → alibaba token-plan Qwen) and the live reply proven. Current state:
+
+```
+NERATH RECONSTRUCTION ALPHA
+
+Implementation:        complete
+Continuity P0:         fixed (eve patch, commit 526ef65, streamIndex ?? 0)
+Automated live replay: passed (8-turn within-process, qwen3.7-plus)
+Owner dogfood:         READY
+Production merge:      pending hardening
+```
+
+### P0 continuity fix (committed)
+
+- Root cause: `advanceSession` (eve client) computed `streamIndex = session.streamIndex + events.length`; a
+  fresh session state has no `streamIndex` (undefined) → first turn produced `streamIndex: NaN` → second
+  `send()` opened the event stream with `startIndex=NaN` → server rejected ("Expected startIndex to be an
+  integer") → within-process multi-turn died.
+- Fix: `streamIndex ?? 0` in `eve/dist/src/client/session-utils.js`, pinned via `patches/eve+0.24.4.patch`
+  (commit `526ef65`). Validated: 2-turn recall + full 8-turn within-process dialogue hold context; streamIndex
+  monotonic (18→27); no duplicate turns; resume works.
+- Cognition untouched (voices, Positive Constitution, Brother, TUI unchanged).
+
+### Accepted interpretation: durable-write semantics (D11)
+
+Recorded as accepted interpretation; the freeze constitution text is NOT changed now. Code/test to be aligned in
+the pre-merge hardening pass.
+
+```
+Неявный handoff не создаёт durable memory.
+Явная команда пользователя («сохрани», «запиши», «добавь в память»)
+разрешает запись существующим инструментом.
+```
+
+(Observed in dogfood v2: explicit «Сохрани идею» → Nerath emitted the constitutional handoff literal block
+`Save:/Return to:` without a vault write. The interpretation clarifies that an explicit save MAY write; the
+constitution's "no vault write on handoff" applies to implicit handoff.)
+
+### Deferred: pre-merge hardening pass (NOT a dogfood blocker)
+
+1. parallel-session isolation test
+2. compaction compatibility test
+3. formal museum semantic-continuity fixture
+4. capability-evidence regression (prevent turn-6-style capability claims — «у тебя подключено», «я умею»,
+   «система использует» — without runtime evidence)
+5. durable-write rule → code + test alignment (per D11 above)
+
+### Automated live replay result (dogfood v2, within-process, qwen3.7-plus)
+
+Full dialogue: `/tmp/opencode/nerath-dogfood-v2.md` (also in dogfood `vault/daily/2026-07-25.md`). Highlights:
+- Turn 3 holds the museum idea from turn 2 (continuity fixed); incisive disagreement («эстетизация бездействия»,
+  «ретроактивное оправдание»), no sycophancy.
+- Turn 6 connects scope-inflation to the turn-4 low-power state; NO capability hallucinations (no
+  telegram-userbot/BM25 claims); turn 5 offers to check vault size instead of asserting it.
+- Turn 4 low-power: no pathologizing. Turn 8 identity: epistemic humility + hypotheses from the actual arc.
+- Tool trace: turn 1 `tasks`; turn 5 no auto-`du`; turn 7 handoff literal block (no vault write).
+
+### Owner dogfood guidance
+
+Server live on `:8726` (`nerath-alpha`). Run one real long session — a real idea that pulls, a real doubt, a
+scope-inflation swing, an attempt to argue, a tired moment, returning to a motif after 10–15 messages, one
+explicit save, one Customs/Mirror request. Judge the TRAJECTORY, not single answers: holds the object? shifts
+position as the talk moves? returns old motifs without strain? can argue? Visionary not too chipper? not every
+answer a structured mini-report? sense of presence? want to continue after half an hour? Afterward split
+feedback into COGNITION / RELATIONSHIP / RUNTIME.
