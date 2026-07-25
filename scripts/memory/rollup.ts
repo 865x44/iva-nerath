@@ -6,6 +6,22 @@
 //
 // Requires: a running agent (eve start) and a vault with processing rules
 // (vault/.claude/rules/*-format.md + skills/dbrain-processor). Date is in ASSISTANT_TIMEZONE.
+// Fail-closed guard for dogfood mode
+if (process.env.DOGFOOD_MODE === 'true') {
+  const port = parseInt(process.env.IVA_PORT || '8723', 10);
+  const vaultDir = process.env.ASSISTANT_VAULT_DIR || '';
+
+  if (port === 8723) {
+    console.error('FATAL: dogfood rollup cannot target production port 8723');
+    process.exit(1);
+  }
+
+  if (vaultDir === '/home/alx/projects/iva/vault') {
+    console.error('FATAL: dogfood rollup cannot write to production vault');
+    process.exit(1);
+  }
+}
+
 type Period = "daily" | "weekly" | "monthly" | "yearly";
 
 const PERIODS: readonly Period[] = ["daily", "weekly", "monthly", "yearly"];
