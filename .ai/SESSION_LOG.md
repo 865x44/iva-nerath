@@ -54,3 +54,26 @@
 - Next: Протестировать /provider из Telegram ещё раз.
 - Gate: node-24 --check scripts/telegram-poll.mjs OK; typecheck OK; diff --check OK; сервисы стабильно активны.
 
+## 2026-07-15 02:15 — handoff close
+
+- Summary: W0 evidence and a W1 Clarity design draft were produced, but architecture review exposed an unresolved product-runtime decision. No migration, code, restart, or commit ran. The user says a choice is made but did not restate its exact runtime/boundary selection in this chat.
+- Next: At session start, have the user state the selected long-term Iva runtime and integration boundary; record a durable decision record, then revise the plan before any W2 or W3 work.
+- Gate: BLOCKED: do not accept W1 or start W2/W3 until the runtime decision is recorded and `zones` is proven pure-read or removed from the read-only contract.
+
+## 2026-07-15 07:17 — handoff update
+
+- Summary: IVA-M1-B/C accepted: provider pin tests (9/9) + build provenance stamper merged to main (e3ef80f); .output rebuilt node-24 and traced via build-info.json; iva.service restarted on opencode/deepseek-v4-flash after fixing .env drift (MODEL_PROVIDER kimi→opencode per user, OPENCODE_MODEL flash-free→flash — flash-free not supported on zen/go, was the post-restart AI_APICallError); rollback: .output.bak-iva-m1c + .eve.bak-iva-m1c; kimi switch = sed MODEL_PROVIDER + restart
+- Next: Verify Iva answers end-to-end with a real message (zen endpoint was flaky today, fallback to kimi documented); backlog: iva.service ignores SIGTERM (SIGABRT+coredump on stop), no graceful shutdown
+
+## 2026-07-24 03:39 — handoff close
+
+- Summary: Unsafe upstream merge plan reviewed and replaced in place with safe isolated-worktree v0.2. Original backed up and hash-verified. Upstream-before-IVA-T1 order accepted; current IVA-T1 pre-merge evidence is not reusable after merge. No merge, fetch, worktree, npm, commit, deploy, or restart ran. Existing Beads and .gitignore mutation remains unaccepted and must not be swept.
+- Next: Explicitly approve and launch only Phases A/B from .ai/plans/iva-upstream-merge-plan.md using the section 21 fresh Terra-high /orc prompt; create the durable recovery package, pin upstream, build an isolated uncommitted merge candidate, and stop at IVA_UPSTREAM_MERGE_CANDIDATE_REPORTED for primary acceptance. After accepted upstream integration, rerun IVA-T1 scouts and contract freeze.
+- Gate: Plan is REVISED, NOT APPROVED. Do not modify dirty live main; do not inspect or transmit secrets, .env, vault, transcripts, Telegram data, or Beads credentials; no git add -A, reset --hard, commit, push, PR, live integration, deploy, restart, smoke, cleanup, or destructive rollback. Stop after IVA_UPSTREAM_MERGE_CANDIDATE_REPORTED.
+
+## 2026-07-26 02:46 — handoff close
+
+- Summary: Nerath Reconstruction Alpha closed: PERSONA suppression replaced with composition (Invariant Kernel + Positive layer + PERSONA underlayer + 7 voice-registers + Resonance + Brother layer + glitch TUI + isolated Play Canon). Continuity P0 (eve 0.24.4 streamIndex NaN) fixed via patch-package (526ef65). Automated 8-turn live dogfood (qwen3.7-plus via alibaba token plan) passed: own position, scope-inflation resistance, imagery, epistemic spine, cross-turn continuity. Ordinary Nerath provisionally accepted for alpha; owner dogfood of ordinary Nerath intentionally skipped. Work in worktree feature/nerath-reconstruction-alpha @ d48efb7, freeze tag candidate/nerath-reconstruction-alpha-20260725. Runtime 8726 stopped. Production Iva (8723/iva.service) untouched, dirty main vault/data clean.
+- Next: Brother-first owner dive in a FRESH session. Plan: worktree .ai/plans/nerath-alpha-handoff-and-brother-first-plan-2026-07-25.md; close handoff: .ai/handoffs/nerath-reconstruction-alpha-close-2026-07-25.md. Start from HEAD of closed alpha (d48efb7); brother/v0-cognition is DONOR ONLY (selective cherry-pick: launcher/renderer/terminal cleanup/glitch transitions/fixtures/Play Canon primitives; no wholesale merge, no stale cognition). Bring existing Brother layer to immediate owner-dive readiness, minimal smoke only. After Brother owner dive: iva.service graceful shutdown epic. Do NOT start upstream merge or guards 7-10.
+- Gate: HEAD d48efb7, worktree clean, diff --check clean, 526ef65+5ccfa77 reachable from HEAD, alpha tag candidate/nerath-reconstruction-alpha-20260725 present, 8726 stopped + no alpha processes, prod 8723 + iva.service active, dirty main vault/data untouched, close handoff + Brother plan committed. Marker: NERATH_RECONSTRUCTION_ALPHA_CLOSED.
+

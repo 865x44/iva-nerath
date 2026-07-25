@@ -18,7 +18,7 @@ iva
 - [Blocker 1]
 
 ## Next Recommended Action
-Протестировать /provider из Telegram ещё раз.
+Verify Iva answers end-to-end with a real message (zen endpoint was flaky today, fallback to kimi documented); backlog: iva.service ignores SIGTERM (SIGABRT+coredump on stop), no graceful shutdown
 
 ## Truth Sources
 - This repo uses `.ai/STATE.md` as current operational truth where present.
@@ -95,4 +95,45 @@ iva
 - **Summary:** Исправил петлю рестартов после /provider: теперь telegram-poll перезапускает только iva.service, а не себя вместе с ним; offset сохраняется штатно в основном цикле.
 - **Next:** Протестировать /provider из Telegram ещё раз.
 - **Gate:** node-24 --check scripts/telegram-poll.mjs OK; typecheck OK; diff --check OK; сервисы стабильно активны.
+
+## Handoff Update (close) — 2026-07-15 02:15:47
+
+- **Summary:** W0 evidence and a W1 Clarity design draft were produced, but architecture review exposed an unresolved product-runtime decision. No migration, code, restart, or commit ran. The user says a choice is made but did not restate its exact runtime/boundary selection in this chat.
+- **Next:** At session start, have the user state the selected long-term Iva runtime and integration boundary; record a durable decision record, then revise the plan before any W2 or W3 work.
+- **Gate:** BLOCKED: do not accept W1 or start W2/W3 until the runtime decision is recorded and `zones` is proven pure-read or removed from the read-only contract.
+
+## Handoff Update (update) — 2026-07-15 07:17:56
+
+- **Summary:** IVA-M1-B/C accepted: provider pin tests (9/9) + build provenance stamper merged to main (e3ef80f); .output rebuilt node-24 and traced via build-info.json; iva.service restarted on opencode/deepseek-v4-flash after fixing .env drift (MODEL_PROVIDER kimi→opencode per user, OPENCODE_MODEL flash-free→flash — flash-free not supported on zen/go, was the post-restart AI_APICallError); rollback: .output.bak-iva-m1c + .eve.bak-iva-m1c; kimi switch = sed MODEL_PROVIDER + restart
+- **Next:** Verify Iva answers end-to-end with a real message (zen endpoint was flaky today, fallback to kimi documented); backlog: iva.service ignores SIGTERM (SIGABRT+coredump on stop), no graceful shutdown
+
+## Handoff Update (close) — 2026-07-24 03:39:23
+
+- **Summary:** Unsafe upstream merge plan reviewed and replaced in place with safe isolated-worktree v0.2. Original backed up and hash-verified. Upstream-before-IVA-T1 order accepted; current IVA-T1 pre-merge evidence is not reusable after merge. No merge, fetch, worktree, npm, commit, deploy, or restart ran. Existing Beads and .gitignore mutation remains unaccepted and must not be swept.
+- **Next:** Explicitly approve and launch only Phases A/B from .ai/plans/iva-upstream-merge-plan.md using the section 21 fresh Terra-high /orc prompt; create the durable recovery package, pin upstream, build an isolated uncommitted merge candidate, and stop at IVA_UPSTREAM_MERGE_CANDIDATE_REPORTED for primary acceptance. After accepted upstream integration, rerun IVA-T1 scouts and contract freeze.
+- **Gate:** Plan is REVISED, NOT APPROVED. Do not modify dirty live main; do not inspect or transmit secrets, .env, vault, transcripts, Telegram data, or Beads credentials; no git add -A, reset --hard, commit, push, PR, live integration, deploy, restart, smoke, cleanup, or destructive rollback. Stop after IVA_UPSTREAM_MERGE_CANDIDATE_REPORTED.
+
+## Handoff Update (init) — 2026-07-25
+
+- **Summary:** Knowledge init for Nerath Reconstruction Alpha. Discovered `nerath-chat` CLI tool (bash launcher + Node.js client), traced Iva/Nerath architecture (shared Eve framework, same vault, same agent.ts, same memory pipeline; Nerath = mode flag + constitution injection + PERSONA suppression). Read all 6 key instruction files (05-language, 10-map, 20-core, 25-persona, 30-nerath, now). Confirmed worktree exists at `/home/alx/.local/share/iva/worktrees/nerath-core-candidate-20260724T000000Z`. Analyzed NERATH RECONSTRUCTION ALPHA plan (3-wave, 6-invariant approach). Created 7 knowledge files in `knowledge/` (AGENT_ONBOARDING, MAP, MODULES, FLOWS, DUPLICATES, DECISIONS, GOTCHAS). Frontmatter validated. User has given write/build permission.
+- **Next:** Wave 1 per `.ai/plans/nerath-reconstruction-alpha.md` — conversation-and-memory topology analysis, vault write fence, invariant kernel extraction. All work in isolated branch and worktree.
+- **Gate:** knowledge/ 7 files written, frontmatter validated, STATE.md updated, plan saved to `.ai/plans/nerath-reconstruction-alpha.md`. User has given explicit build permission.
+
+## Handoff Update (close) — 2026-07-25 (Sanitation Alpha)
+
+- **Summary:** Completed Nerath Sanitation Alpha — pre-reconstruction cleanup and safety hardening. Executed 6 briefs via /worker (qwen3.7-max) and /agy-code (Gemini 3.1 Pro High):
+  1. **Brief 1 (Runtime snapshot):** Verified all dogfood/brother services isolated from production. Dogfood on port 8724 uses separate vault/data via `runtime.override.env`. Brother on port 8725 also isolated.
+  2. **Brief 2 (Lineage reconciliation):** Built exact commit chain `1ee221b → c7b06ac → fc312a6 → 97ef122 → 018c19a → 904d840 → dd60acb → 1b770bd`. Selected canonical base: `1b770bd` (linear descendant of r1, includes all candidate commits). Created tag `candidate/nerath-pre-reconstruction-20260725`.
+  3. **Brief 3 (Fail-closed isolation):** Added guards to `scripts/memory/rollup.ts` (prevents dogfood from targeting production port 8723 or vault). Rewrote launchers `/home/alx/.local/bin/nerath-chat` and `brother-chat` with absolute paths and fail-closed checks. Created `scripts/verify-dogfood-isolation.mjs` smoke test (passes).
+  4. **Brief 4 (Canonical base + worktree):** Created branch `feature/nerath-reconstruction-alpha` from `1b770bd`. Created worktree `/home/alx/.local/share/iva/worktrees/nerath-reconstruction-alpha-20260725`. Created dogfood root `/home/alx/.local/share/iva/dogfood/nerath-reconstruction-alpha` with isolated vault/data on port 8726.
+  5. **Brief 5 (Session continuity):** Added session state persistence to `scripts/nerath-stage2/nerath-chat.mjs`. Saves `session.state` to `data/nerath-cli-session.json`. Supports resume on restart, `/new` command, `--fresh` flag. Handles expired tokens gracefully.
+  6. **Brief 6 (Git hygiene):** Removed stash (URL fix already in r1). Deleted 3 stale subagent branches. Removed plan worktree `nerath-core-candidate-goal-20260724`. Archived orphaned release `018c19aa4f21`. Production untouched. Upstream integration untouched. Brother candidate untouched.
+- **Next:** Ready for Nerath Reconstruction Alpha. Start Wave 1 from `/home/alx/.local/share/iva/worktrees/nerath-reconstruction-alpha-20260725` on branch `feature/nerath-reconstruction-alpha` (SHA `1b770bd`).
+- **Gate:** All 6 briefs completed. Tag `candidate/nerath-pre-reconstruction-20260725` created. Branch `feature/nerath-reconstruction-alpha` created. Worktree ready. Smoke test passes. Production not modified.
+
+## Handoff Update (close) — 2026-07-26 02:46:38
+
+- **Summary:** Nerath Reconstruction Alpha closed: PERSONA suppression replaced with composition (Invariant Kernel + Positive layer + PERSONA underlayer + 7 voice-registers + Resonance + Brother layer + glitch TUI + isolated Play Canon). Continuity P0 (eve 0.24.4 streamIndex NaN) fixed via patch-package (526ef65). Automated 8-turn live dogfood (qwen3.7-plus via alibaba token plan) passed: own position, scope-inflation resistance, imagery, epistemic spine, cross-turn continuity. Ordinary Nerath provisionally accepted for alpha; owner dogfood of ordinary Nerath intentionally skipped. Work in worktree feature/nerath-reconstruction-alpha @ d48efb7, freeze tag candidate/nerath-reconstruction-alpha-20260725. Runtime 8726 stopped. Production Iva (8723/iva.service) untouched, dirty main vault/data clean.
+- **Next:** Brother-first owner dive in a FRESH session. Plan: worktree .ai/plans/nerath-alpha-handoff-and-brother-first-plan-2026-07-25.md; close handoff: .ai/handoffs/nerath-reconstruction-alpha-close-2026-07-25.md. Start from HEAD of closed alpha (d48efb7); brother/v0-cognition is DONOR ONLY (selective cherry-pick: launcher/renderer/terminal cleanup/glitch transitions/fixtures/Play Canon primitives; no wholesale merge, no stale cognition). Bring existing Brother layer to immediate owner-dive readiness, minimal smoke only. After Brother owner dive: iva.service graceful shutdown epic. Do NOT start upstream merge or guards 7-10.
+- **Gate:** HEAD d48efb7, worktree clean, diff --check clean, 526ef65+5ccfa77 reachable from HEAD, alpha tag candidate/nerath-reconstruction-alpha-20260725 present, 8726 stopped + no alpha processes, prod 8723 + iva.service active, dirty main vault/data untouched, close handoff + Brother plan committed. Marker: NERATH_RECONSTRUCTION_ALPHA_CLOSED.
 
