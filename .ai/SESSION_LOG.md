@@ -60,3 +60,11 @@
 - Next: В свежей Terra /orc продолжить только Phase V из candidate worktree: исправить provenance R-report, выполнить focused/full Node 24 tests, typecheck, build, verify-baseline, manifest/root checks, независимый diff/source audit и live/release invariant audit; не коммитить без законно пройденных replay/full gates; выпустить final candidate report и остановиться на IVA_NERATH_CORE_CANDIDATE_REPORTED.
 - Gate: Candidate branch feature/nerat-memory-firewall, HEAD exact r1 1ee221b39a8e7bf46e80305246293a7f627f78af, dirty only candidate artifacts. N1a PASS 5/0; N1b PASS 7/0 + menu 5/0; R PASS 33/0 + validate + diff-check. Live/release/deployment untouched. External replay not run; Phase V not started; no commits.
 
+## 2026-07-25 — handoff close (Nerath Reconstruction Alpha)
+
+- Summary: Nerath Reconstruction Alpha закрыта. Композиция PERSONA+Nerath (Invariant Kernel + Positive layer + PERSONA underlayer + 7 voice-registers + Resonance + Brother layer + glitch TUI + isolated Play Canon). Continuity P0 (eve 0.24.4 streamIndex NaN) исправлен patch-package (526ef65). Авто live dogfood (8 ходов, qwen3.7-plus via alibaba token plan) пройден — собственная позиция, отпор scope inflation, образность, эпистемический позвоночник, непрерывность через ходы. Обычный Nerath provisionally accepted для alpha; owner dogfood обычного Нерата намеренно пропущен.
+- State: feature/nerath-reconstruction-alpha @ da353661af7043f5e21b9cc1d656aa373dc21472, worktree clean. Tag candidate/nerath-reconstruction-alpha-20260725 (не двигать). Runtime 8726 остановлен при закрытии.
+- Durable-write (D11): implicit handoff не пишет; явный save/write — существующим vault tool. Freeze-конституция не менялась.
+- Next: Brother-first owner dive (свежая сессия; plan .ai/plans/nerath-alpha-handoff-and-brother-first-plan-2026-07-25.md). Далее: iva.service graceful shutdown.
+- Gate: HEAD da35366, clean, diff-check clean, 526ef65+5ccfa77 reachable, tag на месте, 8726 остановлен/процессов нет, close handoff записан. Marker: NERATH_RECONSTRUCTION_ALPHA_CLOSED.
+
