@@ -19,15 +19,30 @@ const PROVIDERS = {
     contextWindow: Number(process.env.OLLAMA_CONTEXT_WINDOW ?? 131072),
     // Дешёвая мультимодалка того же провайдера (проверено на проде: принимает image_url, http 200).
     visionModel: "gemma3:12b",
+    fallbackModel: undefined,
   },
   opencode: {
     // Продукт переименован Zen → Go, но API живёт на легаси-пути /zen/ (у /go/v1 — 404).
-    baseURL: "https://opencode.ai/zen/go/v1",
+    // OPENCODE_BASE_URL позволяет указать любой OpenAI-совместимый эндпоинт (напр. alibaba
+    // token-plan для Qwen); дефолт — OpenCode Go.
+    baseURL: process.env.OPENCODE_BASE_URL ?? "https://opencode.ai/zen/go/v1",
     apiKey: process.env.OPENCODE_API_KEY,
     // Эндпоинт ждёт bare-ID — срезаем внутренний UI-префикс "opencode-go/" из дефолта и старых .env.
     textModel: (process.env.OPENCODE_MODEL ?? "deepseek-v4-pro").replace(/^opencode-go\//, ""),
     contextWindow: Number(process.env.OPENCODE_CONTEXT_WINDOW ?? 131072),
-    visionModel: "gemini-3-flash",
+    // Go's current endpoint table serves GLM through OpenAI-compatible chat/completions.
+    // Qwen3.6 Plus moved to the Anthropic /messages protocol and cannot be used by
+    // this provider instance. Source: https://opencode.ai/docs/go/ (2026-07-24).
+    fallbackModel: (process.env.OPENCODE_FALLBACK_MODEL ?? "glm-5.2").replace(
+      /^opencode-go\//,
+      "",
+    ),
+    // The old gemini-3-flash disappeared from the current Go catalog. Fail closed:
+    // vision is disabled until an operator supplies a catalog-verified compatible model.
+    visionModel: process.env.OPENCODE_VISION_MODEL?.replace(
+      /^opencode-go\//,
+      "",
+    ),
   },
   openrouter: {
     baseURL: "https://openrouter.ai/api/v1",
@@ -39,6 +54,7 @@ const PROVIDERS = {
     // Дешёвая гарантированно-мультимодальная модель для картинок (как gemini-3-flash у opencode):
     // vision работает независимо от выбранной текстовой модели (та может быть text-only).
     visionModel: "google/gemini-2.5-flash",
+    fallbackModel: undefined,
   },
   codex: {
     baseURL: CODEX_BASE_URL,
@@ -47,6 +63,7 @@ const PROVIDERS = {
     contextWindow: Number(process.env.CODEX_CONTEXT_WINDOW ?? 272000),
     // gpt-5* мультимодальны — картинки идут через ту же подписку (см. agent/vision.ts).
     visionModel: process.env.CODEX_MODEL ?? "gpt-5.5",
+    fallbackModel: undefined,
   },
 } as const;
 

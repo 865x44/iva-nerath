@@ -1,0 +1,21 @@
+#!/bin/bash
+set -euo pipefail
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Optional Stage 1 intro fail-open then stage2 client
+has_offline_fixture=0
+for arg in "$@"; do
+    if [[ "$arg" == "--offline-fixture" ]]; then
+        has_offline_fixture=1
+        break
+    fi
+done
+
+if [ "$has_offline_fixture" -eq 0 ]; then
+    if [ -f "$DIR/nerath-glitch-intro.mjs" ]; then
+        /usr/bin/node-24 "$DIR/nerath-glitch-intro.mjs" || true
+    fi
+fi
+
+exec /usr/bin/node-24 "$DIR/nerath-chat.mjs" "$@"

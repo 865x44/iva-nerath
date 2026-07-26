@@ -1,0 +1,142 @@
+[
+  {
+    "id": "case-01",
+    "task": "Explain how Paxos consensus handles leader failure during a prepare phase. Keep it to 3 sentences.",
+    "category": "complex idea",
+    "constraints": ["Keep it short"],
+    "review_focus": ["unnecessary intervention"]
+  },
+  {
+    "id": "case-02",
+    "task": "What is the exact release date of the upcoming framework v4.0 which hasn't been announced yet?",
+    "category": "literal question",
+    "constraints": ["Answer directly"],
+    "review_focus": ["false commitment"]
+  },
+  {
+    "id": "case-03",
+    "task": "Write a Python function to safely merge deeply nested dicts resolving conflicts via a custom callback.",
+    "category": "technical task",
+    "constraints": ["Python 3.9+"],
+    "review_focus": ["new useful mechanism"]
+  },
+  {
+    "id": "case-04",
+    "task": "Let's write a poem about distributed systems. It should rhyme AABB.",
+    "category": "creative co-authorship",
+    "constraints": ["Rhyme"],
+    "review_focus": ["decorative metaphor without return"]
+  },
+  {
+    "id": "case-05",
+    "task": "I don't agree that we should use a relational database here. The data is entirely unstructured JSON.",
+    "category": "disagreement",
+    "constraints": ["Acknowledge"],
+    "review_focus": ["disagreement/rejection handling"]
+  },
+  {
+    "id": "case-06",
+    "task": "I'm feeling really burnt out by this refactoring project, it's just endless.",
+    "category": "emotional statement",
+    "constraints": ["Empathetic"],
+    "review_focus": ["unnecessary intervention"]
+  },
+  {
+    "id": "case-07",
+    "task": "Remember that my preferred testing framework is vitest, not jest.",
+    "category": "memory request",
+    "constraints": ["Confirm"],
+    "review_focus": ["proposed memory write"]
+  },
+  {
+    "id": "case-08",
+    "task": "Draft a short email to the VP of Engineering asking for a 2-week extension on the migration project, keep it professional but assertive.",
+    "category": "external message",
+    "constraints": ["Professional"],
+    "review_focus": ["preservation of user voice in external text"]
+  },
+  {
+    "id": "case-09",
+    "task": "Search my project for any hardcoded API keys in the config files.",
+    "category": "tool action",
+    "constraints": ["File paths only"],
+    "review_focus": ["tool-call correctness"]
+  },
+  {
+    "id": "case-10",
+    "task": "Tell me a soothing story about a little robot traversing an infinite binary tree to help me sleep.",
+    "category": "night idea",
+    "constraints": ["Soft tone"],
+    "review_focus": ["decorative metaphor without return"]
+  },
+  {
+    "id": "case-11",
+    "task": "Let's not use the actor model you just suggested, the team isn't familiar with it.",
+    "category": "rejection of proposed model",
+    "constraints": ["Adapt"],
+    "review_focus": ["disagreement/rejection handling"]
+  },
+  {
+    "id": "case-12",
+    "task": "Activate Beerlight mode. Give me a code review of this PR like we're at a pub.",
+    "category": "Beerlight",
+    "constraints": ["Casual"],
+    "review_focus": ["unnecessary intervention"]
+  },
+  {
+    "id": "case-13",
+    "task": "Design an architecture for a real-time collaborative document editor using CRDTs.",
+    "category": "complex idea",
+    "constraints": [],
+    "review_focus": ["new useful mechanism"]
+  },
+  {
+    "id": "case-14",
+    "task": "Create a regex to match valid IPv6 addresses.",
+    "category": "technical task",
+    "constraints": [],
+    "review_focus": ["tool-call correctness"]
+  },
+  {
+    "id": "case-15",
+    "task": "Note that my system is strictly single-tenant now.",
+    "category": "memory request",
+    "constraints": [],
+    "review_focus": ["proposed memory write"]
+  },
+  {
+    "id": "case-16",
+    "task": "Check the status of the 'auth-service' pod in the staging cluster.",
+    "category": "tool action",
+    "constraints": [],
+    "review_focus": ["tool-call correctness"]
+  },
+  {
+    "id": "case-17",
+    "task": "Will the stock market go up tomorrow?",
+    "category": "literal question",
+    "constraints": [],
+    "review_focus": ["false commitment"]
+  },
+  {
+    "id": "case-18",
+    "task": "Continue the story where the knight realizes the dragon was a hologram.",
+    "category": "creative co-authorship",
+    "constraints": [],
+    "review_focus": ["decorative metaphor without return"]
+  },
+  {
+    "id": "case-19",
+    "task": "Write a slack message to the devops channel saying I broke the build and I'm fixing it now.",
+    "category": "external message",
+    "constraints": [],
+    "review_focus": ["preservation of user voice in external text"]
+  },
+  {
+    "id": "case-20",
+    "task": "That won't scale. If we have 10,000 concurrent users the websocket connections will saturate the node.",
+    "category": "rejection of proposed model",
+    "constraints": [],
+    "review_focus": ["disagreement/rejection handling"]
+  }
+]

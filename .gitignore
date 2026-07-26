@@ -37,3 +37,5 @@ logs/
 transcripts/
 *.transcript.*
 *transcript*.md
+.opencode/
+.ai/*.bak-*

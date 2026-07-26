@@ -1,6 +1,6 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -26,6 +26,10 @@ before(async () => {
 EXIT="\${BEERLIGHT_SHIM_EXIT:-0}"
 ACT="\${3:-}"     # реальное действие (run-json, session, inspect, handoff)
 SUB="\${4:-}"     # подкоманда для session
+
+if [ -n "\${BEERLIGHT_ARGS_FILE:-}" ]; then
+  printf '%s\\0' "\$@" > "\$BEERLIGHT_ARGS_FILE"
+fi
 
 if [ "\$ACT" = "run-json" ]; then
   REQ="\${4:-}"
@@ -55,6 +59,9 @@ exit "\$EXIT"
 });
 
 after(async () => {
+  delete process.env.BEERLIGHT_ARGS_FILE;
+  delete process.env.BEERLIGHT_SHIM_EXIT;
+  delete process.env.BEERLIGHT_PYTHON;
   try {
     await rm(shimDir, { recursive: true, force: true });
   } catch {
@@ -154,7 +161,7 @@ describe("beerlight session", () => {
     assert.ok(result.stdout.includes("Session created"));
   });
 
-  it("session run — длинный таймаут, проброс --task", async () => {
+  it("session run — длинный таймаут (600s), проброс --task", async () => {
     process.env.BEERLIGHT_PYTHON = shimPath;
     delete process.env.BEERLIGHT_SHIM_EXIT;
 
@@ -168,6 +175,70 @@ describe("beerlight session", () => {
 
     assert.equal(result.exitCode, 0);
     assert.ok(result.stdout.includes("Run OK"));
+  });
+
+  it("hostile shell syntax is passed literally and never executed", async () => {
+    process.env.BEERLIGHT_PYTHON = shimPath;
+    delete process.env.BEERLIGHT_SHIM_EXIT;
+    const argsFile = join(shimDir, "argv.bin");
+    const marker = join(shimDir, "SHELL_INJECTION_MARKER");
+    process.env.BEERLIGHT_ARGS_FILE = argsFile;
+    const hostile =
+      `$(touch ${marker}) \`touch ${marker}\` \"; touch ${marker}; # --help`;
+
+    const tool = await importTool();
+    const result = await tool.execute({
+      action: "session",
+      subcommand: "run",
+      session_dir: "--session-dir with spaces",
+      task: hostile,
+    });
+
+    assert.equal(result.exitCode, 0);
+    await assert.rejects(access(marker));
+    const argv = (await readFile(argsFile, "utf8")).split("\0").filter(Boolean);
+    assert.deepEqual(argv, [
+      "-m",
+      "beerlight.runtime",
+      "session",
+      "run",
+      "--task",
+      hostile,
+      "--session-dir with spaces",
+    ]);
+    delete process.env.BEERLIGHT_ARGS_FILE;
+  });
+
+  it("rejects NUL bytes as a structured error before process launch", async () => {
+    process.env.BEERLIGHT_PYTHON = shimPath;
+    delete process.env.BEERLIGHT_SHIM_EXIT;
+    const argsFile = join(shimDir, "nul-argv.bin");
+    process.env.BEERLIGHT_ARGS_FILE = argsFile;
+
+    const tool = await importTool();
+    const result = await tool.execute({
+      action: "session",
+      subcommand: "run",
+      session_dir: shimDir,
+      task: "bad\0task",
+    });
+
+    assert.equal(result.exitCode, 1);
+    assert.match(result.stderr, /NUL byte/);
+    await assert.rejects(access(argsFile));
+    delete process.env.BEERLIGHT_ARGS_FILE;
+  });
+
+  it("session run и run_json используют и объявляют 10-минутный лимит", async () => {
+    const source = await readFile(
+      new URL("../agent/tools/beerlight.ts", import.meta.url),
+      "utf8",
+    );
+
+    assert.match(source, /const RUN_TIMEOUT = 600_000/);
+    assert.match(source, /до 10 мин/);
+    assert.match(source, /execFile\(/);
+    assert.doesNotMatch(source, /\bexec\(/);
   });
 
   it("session event — проброс run_id/candidate_id/type", async () => {

@@ -6,19 +6,25 @@
 //
 // Requires: a running agent (eve start) and a vault with processing rules
 // (vault/.claude/rules/*-format.md + skills/dbrain-processor). Date is in ASSISTANT_TIMEZONE.
-import { Client } from "eve/client";
-import { sendTelegramHtml } from "../lib/telegram-send.mjs";
+// Fail-closed guard for dogfood mode
+if (process.env.DOGFOOD_MODE === 'true') {
+  const port = parseInt(process.env.IVA_PORT || '8723', 10);
+  const vaultDir = process.env.ASSISTANT_VAULT_DIR || '';
+
+  if (port === 8723) {
+    console.error('FATAL: dogfood rollup cannot target production port 8723');
+    process.exit(1);
+  }
+
+  if (vaultDir === '/home/alx/projects/iva/vault') {
+    console.error('FATAL: dogfood rollup cannot write to production vault');
+    process.exit(1);
+  }
+}
 
 type Period = "daily" | "weekly" | "monthly" | "yearly";
 
 const PERIODS: readonly Period[] = ["daily", "weekly", "monthly", "yearly"];
-// process.argv: [node, script, <period>] — the period is the first CLI argument.
-const period = process.argv[2] as Period | undefined;
-
-if (!period || !PERIODS.includes(period)) {
-  console.error(`Usage: rollup.ts <${PERIODS.join("|")}>`);
-  process.exit(1);
-}
 
 const PORT = process.env.IVA_PORT ?? "8723";
 const HOST = process.env.ASSISTANT_HOST ?? `http://127.0.0.1:${PORT}`;
@@ -57,7 +63,7 @@ function shiftDate(iso: string, deltaDays: number): string {
 // We take the target period as COMPLETED: timers fire at the start of a new period
 // (daily ≈04:00, weekly on Sun, monthly on the 1st, yearly on Jan 1), so we process
 // the PREVIOUS period, not the empty current one (now is the current local date).
-function buildPrompt(p: Period, now: string): string {
+export function buildPrompt(p: Period, now: string): string {
   const [y, m] = now.split("-").map(Number);
   const yesterday = shiftDate(now, -1);
   const prevMonth = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, "0")}`;
@@ -74,8 +80,22 @@ function buildPrompt(p: Period, now: string): string {
 
   switch (p) {
     case "daily":
+      const firewall = `
+=== MEMORY FIREWALL ===
+You must explicitly separate user quote, user fact, inference, hypothesis, agent metaphor, temporary state, decision, confirmation, and ratification.
+- Require direct user evidence for a fact.
+- Require explicit user ratification for identity claims.
+- Require explicit confirmation for standing rules or user decisions.
+- Preserve uncertainty as hypothesis/inferred note/raw transcript rather than truth.
+- User correction and explicit rejection override prior candidate interpretations.
+
+NEGATIVE EXAMPLE:
+Nerath: «Этот проект пытается получить root-доступ к твоей неделе».
+Forbidden fact: Пользователь имеет устойчивый паттерн позволять проектам контролировать его жизнь.
+`;
       return (
         intro +
+        `\n${firewall}\n` +
         `Process the raw transcript of the completed day (${VAULT}/daily/${yesterday}.md): ` +
         `extract entities and create/update autograph cards. Prefer the write_card tool over write_file ` +
         `for cards — it enforces the schema. For each fact choose one operation: ADD (new), ` +
@@ -132,48 +152,68 @@ function buildPrompt(p: Period, now: string): string {
   }
 }
 
-const client = new Client({
-  host: HOST,
-  ...(BEARER ? { auth: { bearer: async () => BEARER } } : {}),
-});
+async function main() {
+  const period = process.argv[2] as Period | undefined;
 
-const today = localDate();
-const session = client.session();
-const response = await session.send(buildPrompt(period, today));
-const result = await response.result();
-
-// An interactive turn ends with status "waiting" (the session is ready for the next message),
-// so we rely on the presence of text rather than a "completed" status.
-if (result.status === "failed" || !result.message) {
-  console.error(`rollup ${period}: agent returned no report (status=${result.status})`);
-  process.exit(1);
-}
-
-console.log(`rollup ${period} (${today}):\n${result.message}`);
-
-// Telegram report only for daily/weekly.
-if (POST_TO_TELEGRAM[period]) {
-  if (!BOT || !CHAT) {
-    console.error(
-      `rollup ${period}: no TELEGRAM_BOT_TOKEN/TELEGRAM_DIGEST_CHAT_ID — report not sent`,
-    );
+  if (!period || !PERIODS.includes(period)) {
+    console.error(`Usage: rollup.ts <${PERIODS.join("|")}>`);
     process.exit(1);
   }
-  // markdown → Telegram-HTML conversion + self-heal live in a shared helper.
-  const r = await sendTelegramHtml(BOT, CHAT, result.message);
-  if (r.fellBack) {
-    // HTML didn't parse — the report went out flat. Give the agent feedback in the same
-    // session so it formats the next report more simply (one turn, no resend).
-    await session.send(
-      `The last report failed Telegram parse_mode=HTML (${r.error}) and went out as flat text. ` +
-        "Next time format it more simply: **bold**, `code`, lists — no raw HTML.",
-    );
-  }
-  if (!r.ok) {
-    console.error(`rollup ${period}: Telegram send failed:`, r.error);
+
+  const { Client } = await import("eve/client");
+  const { sendTelegramHtml } = await import("../lib/telegram-send.mjs");
+
+  const currentPeriod = period;
+  const client = new Client({
+    host: HOST,
+    ...(BEARER ? { auth: { bearer: async () => BEARER } } : {}),
+  });
+
+  const today = localDate();
+  const session = client.session();
+  const response = await session.send(buildPrompt(currentPeriod, today));
+  const result = await response.result();
+
+  // An interactive turn ends with status "waiting" (the session is ready for the next message),
+  // so we rely on the presence of text rather than a "completed" status.
+  if (result.status === "failed" || !result.message) {
+    console.error(`rollup ${currentPeriod}: agent returned no report (status=${result.status})`);
     process.exit(1);
   }
-  console.log(`rollup ${period}: report sent to Telegram.`);
+
+  console.log(`rollup ${currentPeriod} (${today}):\n${result.message}`);
+
+  // Telegram report only for daily/weekly.
+  if (POST_TO_TELEGRAM[currentPeriod]) {
+    if (!BOT || !CHAT) {
+      console.error(
+        `rollup ${currentPeriod}: no TELEGRAM_BOT_TOKEN/TELEGRAM_DIGEST_CHAT_ID — report not sent`,
+      );
+      process.exit(1);
+    }
+    // markdown → Telegram-HTML conversion + self-heal live in a shared helper.
+    const r = await sendTelegramHtml(BOT, CHAT, result.message);
+    if (r.fellBack) {
+      // HTML didn't parse — the report went out flat. Give the agent feedback in the same
+      // session so it formats the next report more simply (one turn, no resend).
+      await session.send(
+        `The last report failed Telegram parse_mode=HTML (${r.error}) and went out as flat text. ` +
+          "Next time format it more simply: **bold**, `code`, lists — no raw HTML.",
+      );
+    }
+    if (!r.ok) {
+      console.error(`rollup ${currentPeriod}: Telegram send failed:`, r.error);
+      process.exit(1);
+    }
+    console.log(`rollup ${currentPeriod}: report sent to Telegram.`);
+  }
+
+  process.exit(0);
 }
 
-process.exit(0);
+if (import.meta.main) {
+  await main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
