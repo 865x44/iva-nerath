@@ -4,21 +4,27 @@
 iva
 
 ## Current Source Status
-- **Branch:** [Current branch]
-- **HEAD:** [Current commit hash]
-- **Recent scoped commits:** [List]
-- **Tests:** [Test status]
-- **Dirty tree:** [Status of local changes]
+- **Branch:** `main`
+- **HEAD:** `ea35396d02ba70f80b652cca89db8250665a1929`
+- **Recent scoped commits:** `c941246` (upstream candidate), `5574800` (Nerath merge), `ea35396` (typed Nerath export contract)
+- **Tests:** Phase A/B Node 24 gates passed: typecheck; 50 TypeScript, 98 native, and 96 Nerath/Brother tests; dogfood isolation and exact `vault/ data/` checks passed.
+- **Dirty tree:** Pre-merge dirty snapshot was not discarded. It is retained by immutable safety tags and a checksummed external archive; this post-merge STATE update is the only new local diff.
 
 ## Active Invariants
-1. [Invariant 1]
-2. [Invariant 2]
+1. Production Iva and its vault/data were not touched by this merge operation.
+2. `safety/main-pre-merge-20260726`, `safety/main-dirty-pre-merge-20260726`, and `safety/main-dirty-residue-20260726` must remain intact pending explicit user action.
 
 ## Blockers & Open Questions
-- [Blocker 1]
+- The former dirty tree conflicts with the merged candidate and is deliberately archived rather than reconciled into `main`.
 
 ## Next Recommended Action
-Verify Iva answers end-to-end with a real message (zen endpoint was flaky today, fallback to kimi documented); backlog: iva.service ignores SIGTERM (SIGABRT+coredump on stop), no graceful shutdown
+Keep the accepted candidate as a clean code baseline. Phase D archival of other worktrees/branches is optional and requires separate approval; production startup, restart, and live-message dogfood remain outside this merge operation.
+
+## Handoff Update (close) — 2026-07-26 (upstream + Nerath merge)
+
+- **Summary:** `main` fast-forwarded from `bc39f4a` to accepted candidate `ea35396` after upstream and Nerath gates. No service restart, push, vault/data modification, or cleanup/deletion ran.
+- **Dirty preservation:** Original snapshot is anchored at `safety/main-dirty-pre-merge-20260726` (`fe59f527`) and externally archived at `/home/alx/.local/share/iva/archives/main-dirty-pre-merge-20260726-fe59f527/`; conflict residue is separately anchored at `safety/main-dirty-residue-20260726` (`d6c371cf`).
+- **Gate:** The archive bundle and tracked/untracked tar archives passed SHA-256 verification. Do not apply either stash to `main` without a dedicated reconciliation decision.
 
 ## Truth Sources
 - This repo uses `.ai/STATE.md` as current operational truth where present.
@@ -136,4 +142,16 @@ Verify Iva answers end-to-end with a real message (zen endpoint was flaky today,
 - **Summary:** Nerath Reconstruction Alpha closed: PERSONA suppression replaced with composition (Invariant Kernel + Positive layer + PERSONA underlayer + 7 voice-registers + Resonance + Brother layer + glitch TUI + isolated Play Canon). Continuity P0 (eve 0.24.4 streamIndex NaN) fixed via patch-package (526ef65). Automated 8-turn live dogfood (qwen3.7-plus via alibaba token plan) passed: own position, scope-inflation resistance, imagery, epistemic spine, cross-turn continuity. Ordinary Nerath provisionally accepted for alpha; owner dogfood of ordinary Nerath intentionally skipped. Work in worktree feature/nerath-reconstruction-alpha @ d48efb7, freeze tag candidate/nerath-reconstruction-alpha-20260725. Runtime 8726 stopped. Production Iva (8723/iva.service) untouched, dirty main vault/data clean.
 - **Next:** Brother-first owner dive in a FRESH session. Plan: worktree .ai/plans/nerath-alpha-handoff-and-brother-first-plan-2026-07-25.md; close handoff: .ai/handoffs/nerath-reconstruction-alpha-close-2026-07-25.md. Start from HEAD of closed alpha (d48efb7); brother/v0-cognition is DONOR ONLY (selective cherry-pick: launcher/renderer/terminal cleanup/glitch transitions/fixtures/Play Canon primitives; no wholesale merge, no stale cognition). Bring existing Brother layer to immediate owner-dive readiness, minimal smoke only. After Brother owner dive: iva.service graceful shutdown epic. Do NOT start upstream merge or guards 7-10.
 - **Gate:** HEAD d48efb7, worktree clean, diff --check clean, 526ef65+5ccfa77 reachable from HEAD, alpha tag candidate/nerath-reconstruction-alpha-20260725 present, 8726 stopped + no alpha processes, prod 8723 + iva.service active, dirty main vault/data untouched, close handoff + Brother plan committed. Marker: NERATH_RECONSTRUCTION_ALPHA_CLOSED.
+
+## Handoff Update (close) — 2026-07-26 20:59:00
+
+- **Summary:** main accepted at ea35396; the original dirty snapshot and conflict residue are preserved by safety tags and a checksummed external archive; production was not touched.
+- **Next:** Start a new session with /planner for a separate post-merge scope. Phase D is optional and requires an explicit decision; reconciliation of the archived dirty snapshot is a separate task.
+- **Gate:** Do not apply either safety stash or start Phase D, deployment, service restart, or live dogfood without separate explicit approval.
+
+## Handoff Update (close) — 2026-07-26 22:29:10
+
+- **Summary:** Phase D archival inventory accepted: six immutable archive tags were created at the approved SHAs; all safety tags, three stashes, external archives, branches, and worktree registrations remain preserved. No deletion, push, deployment, restart, or source edit occurred.
+- **Next:** Stop. Keep the accepted main baseline and archives intact. Any reconciliation of the preserved dirty snapshots, worktree removal, branch deletion, tag deletion, deployment, or runtime dogfood requires a new separately approved plan.
+- **Gate:** Archived inventory confirmed by user. Do not apply safety stashes, remove or prune worktrees, delete branches/tags, push, deploy, restart services, or access production vault/data without a new explicit approval.
 

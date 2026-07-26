@@ -77,3 +77,15 @@
 - Next: Brother-first owner dive in a FRESH session. Plan: worktree .ai/plans/nerath-alpha-handoff-and-brother-first-plan-2026-07-25.md; close handoff: .ai/handoffs/nerath-reconstruction-alpha-close-2026-07-25.md. Start from HEAD of closed alpha (d48efb7); brother/v0-cognition is DONOR ONLY (selective cherry-pick: launcher/renderer/terminal cleanup/glitch transitions/fixtures/Play Canon primitives; no wholesale merge, no stale cognition). Bring existing Brother layer to immediate owner-dive readiness, minimal smoke only. After Brother owner dive: iva.service graceful shutdown epic. Do NOT start upstream merge or guards 7-10.
 - Gate: HEAD d48efb7, worktree clean, diff --check clean, 526ef65+5ccfa77 reachable from HEAD, alpha tag candidate/nerath-reconstruction-alpha-20260725 present, 8726 stopped + no alpha processes, prod 8723 + iva.service active, dirty main vault/data untouched, close handoff + Brother plan committed. Marker: NERATH_RECONSTRUCTION_ALPHA_CLOSED.
 
+## 2026-07-26 20:59 — handoff close
+
+- Summary: main accepted at ea35396; the original dirty snapshot and conflict residue are preserved by safety tags and a checksummed external archive; production was not touched.
+- Next: Start a new session with /planner for a separate post-merge scope. Phase D is optional and requires an explicit decision; reconciliation of the archived dirty snapshot is a separate task.
+- Gate: Do not apply either safety stash or start Phase D, deployment, service restart, or live dogfood without separate explicit approval.
+
+## 2026-07-26 22:29 — handoff close
+
+- Summary: Phase D archival inventory accepted: six immutable archive tags were created at the approved SHAs; all safety tags, three stashes, external archives, branches, and worktree registrations remain preserved. No deletion, push, deployment, restart, or source edit occurred.
+- Next: Stop. Keep the accepted main baseline and archives intact. Any reconciliation of the preserved dirty snapshots, worktree removal, branch deletion, tag deletion, deployment, or runtime dogfood requires a new separately approved plan.
+- Gate: Archived inventory confirmed by user. Do not apply safety stashes, remove or prune worktrees, delete branches/tags, push, deploy, restart services, or access production vault/data without a new explicit approval.
+
