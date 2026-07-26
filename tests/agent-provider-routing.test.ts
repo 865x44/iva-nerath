@@ -7,6 +7,8 @@ const PROVIDER_ENV_KEYS = [
   "OLLAMA_CONTEXT_WINDOW",
   "OPENCODE_MODEL",
   "OPENCODE_CONTEXT_WINDOW",
+  "OPENCODE_FALLBACK_MODEL",
+  "OPENCODE_VISION_MODEL",
   "OPENROUTER_MODEL",
   "OPENROUTER_CONTEXT_WINDOW",
   "CODEX_MODEL",
@@ -58,7 +60,20 @@ describe("upstream provider routing", () => {
     assert.equal(providerConfig.baseURL, "https://opencode.ai/zen/go/v1");
     assert.equal(providerConfig.textModel, "custom-model");
     assert.equal(providerConfig.contextWindow, 65536);
-    assert.equal(providerConfig.visionModel, "gemini-3-flash");
+    assert.equal(providerConfig.fallbackModel, "glm-5.2");
+    assert.equal(providerConfig.visionModel, undefined);
+  });
+
+  it("accepts only explicit OpenCode fallback and vision overrides", async () => {
+    clearProviderEnv();
+    process.env.MODEL_PROVIDER = "opencode";
+    process.env.OPENCODE_FALLBACK_MODEL = "opencode-go/glm-5.1";
+    process.env.OPENCODE_VISION_MODEL = "opencode-go/catalog-vision";
+
+    const { providerConfig } = await importProvider("opencode-overrides");
+
+    assert.equal(providerConfig.fallbackModel, "glm-5.1");
+    assert.equal(providerConfig.visionModel, "catalog-vision");
   });
 
   it("uses openrouter overrides", async () => {
@@ -102,5 +117,15 @@ describe("upstream provider routing", () => {
     clearProviderEnv();
     const { default: agent } = await import("../agent/agent.ts?case=compaction");
     assert.deepEqual(agent.compaction, { thresholdPercent: 0.7 });
+  });
+
+  it("never routes the Anthropic-protocol qwen fallback through chat/completions", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const source = await readFile(
+      new URL("../agent/provider.ts", import.meta.url),
+      "utf8",
+    );
+    assert.doesNotMatch(source, /fallbackModel:[^\n]*qwen3\.6-plus/);
+    assert.match(source, /fallbackModel:[\s\S]*?"glm-5\.2"/);
   });
 });

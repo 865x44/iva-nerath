@@ -3,12 +3,14 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 // Провайдер и его модели — единый источник в provider.ts (тот же конфиг у agent/vision.ts).
 // codex = подписка ChatGPT (Responses API + OAuth); ollama/opencode = OpenAI-совместимый chat.
 import { providerConfig as cfg, providerName, withReasoningStripped, makeCodexModel } from "./provider.js";
+import { opencodeFetch } from "./opencode-fetch.js";
+import { withOpenCodeStreamFallback } from "./opencode-stream-fallback.js";
 
 // Codex-подписка говорит на Responses API — отдельная модель-фабрика (@ai-sdk/openai).
 // Остальные провайдеры — OpenAI-совместимый chat/completions через openai-compatible.
-const textModel =
+const compatibleProvider =
   providerName === "codex"
-    ? makeCodexModel()
+    ? null
     : createOpenAICompatible({
         name: `iva-${providerName}`,
         baseURL: cfg.baseURL,
@@ -17,7 +19,24 @@ const textModel =
         // {include_usage:true}) → событие step.completed приходит без поля usage, и учёт токенов
         // (agent/hooks/usage.ts) пуст. Включаем, чтобы провайдер отдавал расход в финальном чанке.
         includeUsage: true,
-      })(cfg.textModel);
+        fetch: providerName === "opencode" ? opencodeFetch : undefined,
+      });
+
+const primaryModel =
+  providerName === "codex"
+    ? makeCodexModel()
+    : compatibleProvider!(cfg.textModel);
+
+const textModel =
+  providerName === "opencode" &&
+  cfg.fallbackModel &&
+  cfg.fallbackModel !== cfg.textModel
+    ? withOpenCodeStreamFallback(
+        primaryModel,
+        compatibleProvider!(cfg.fallbackModel),
+        cfg.fallbackModel,
+      )
+    : primaryModel;
 
 export default defineAgent({
   model: withReasoningStripped(textModel),
