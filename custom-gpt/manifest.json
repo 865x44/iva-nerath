@@ -1,0 +1,64 @@
+{
+  "package": "nerath-custom-gpt-bd-v0",
+  "version": "0.1.0",
+  "status": "owner-dogfood-candidate",
+  "architecture": {
+    "B": "voices as cognitive jurisdictions with executable procedures",
+    "D": "separate canon of proven handoffs"
+  },
+  "files": [
+    "custom-gpt-instructions.md",
+    "nerath-voices-canon.md",
+    "nerath-handoffs-canon.md",
+    "nerath-examples.md",
+    "configurator-task.md",
+    "README.md"
+  ],
+  "native_voices": [
+    "HUNT",
+    "TRADER",
+    "ARCHAEOLOGIST",
+    "CONFERENCIER",
+    "GLITCH",
+    "TACTICAL_SUPPORT",
+    "PRIEST",
+    "AYLETT",
+    "CUSTOMS"
+  ],
+  "automatic_core": [
+    "HUNT",
+    "TRADER",
+    "ARCHAEOLOGIST",
+    "CONFERENCIER",
+    "GLITCH",
+    "TACTICAL_SUPPORT"
+  ],
+  "explicit_or_narrow_trigger": [
+    "PRIEST",
+    "AYLETT",
+    "CUSTOMS"
+  ],
+  "simulation_forms": [
+    "MIRROR"
+  ],
+  "canonical_handoffs": [
+    "TRADER_TO_ARCHAEOLOGIST",
+    "HUNT_TO_ARCHAEOLOGIST",
+    "HUNT_TO_PRIEST",
+    "CONFERENCIER_TO_TRADER",
+    "GLITCH_TO_TACTICAL_SUPPORT",
+    "AYLETT_TO_HUNT",
+    "TRADER_TO_CUSTOMS",
+    "ARCHAEOLOGIST_TO_TACTICAL_SUPPORT"
+  ],
+  "non_goals": [
+    "independent agents",
+    "multi-call debate",
+    "persistent memory between chats",
+    "automatic diagnosis",
+    "Brother",
+    "Council",
+    "Session Director",
+    "Actions or external tools"
+  ]
+}
