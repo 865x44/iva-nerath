@@ -38,4 +38,4 @@ transcripts/
 *.transcript.*
 *transcript*.md
 .opencode/
-.ai/*.bak-*
+/.ai/
